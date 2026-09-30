@@ -8,7 +8,9 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64"
+    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64",
+    "build:installer": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis --x64",
+    "build:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable --x64"
   },
   "dependencies": {
     "electron-store": "^8.1.0"
@@ -29,6 +31,12 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
@@ -37,6 +45,14 @@
       ],
       "requestedExecutionLevel": "requireAdministrator",
       "sign": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WinGet Manager",
+      "uninstallDisplayName": "WinGet Manager"
     },
     "files": [
       "**/*",

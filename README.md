@@ -47,15 +47,27 @@ Panel de control moderno e intuitivo para Windows diseñado para gestionar, actu
 
 ---
 
-## 📦 Compilación y Generación del Ejecutable
+## 📦 Compilación y Creación del Instalador de Windows
 
-Para compilar la aplicación y generar un ejecutable portable independiente:
+Puedes generar tanto un **instalador tradicional de Windows (`.exe` Setup con asistente)** como una **versión portable**:
 
-```bash
-npm run build
-```
+1. **Crear el instalador de Windows (Setup `.exe`):**
+   ```bash
+   npm run build:installer
+   ```
+   *Crea un instalador interactivo (`dist/WinGet Manager Setup 1.0.0.exe`) con selección de carpeta, acceso directo en el Escritorio, integración en el Menú Inicio y desinstalador automático en Windows.*
 
-El ejecutable generado se guardará en la carpeta `dist/`.
+2. **Crear la versión portable (sin instalación):**
+   ```bash
+   npm run build:portable
+   ```
+
+3. **Compilar ambos a la vez:**
+   ```bash
+   npm run build
+   ```
+
+Los ejecutables generados se guardarán en la carpeta `dist/`.
 
 ---
 
