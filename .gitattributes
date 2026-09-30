@@ -1,2 +1,0 @@
-*.exe filter=lfs diff=lfs merge=lfs -text
-WinGet[[:space:]]Manager-win32-x64/* filter=lfs diff=lfs merge=lfs -text

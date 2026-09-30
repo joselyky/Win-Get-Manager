@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: https:; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com;" />
+  <title>WinGet Manager — Panel de Actualizaciones</title>
+  <meta name="description" content="Panel de control para gestionar actualizaciones de software en Windows mediante winget." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       Custom Titlebar
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="titlebar" class="titlebar">
+    <div class="titlebar-drag-region"></div>
+    <div class="titlebar-left">
+      <div class="app-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span class="titlebar-title">WinGet Manager</span>
+    </div>
+    <div class="titlebar-controls">
+      <button id="btn-minimize" class="titlebar-btn btn-minimize" title="Minimizar" aria-label="Minimizar">
+        <svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-maximize" class="titlebar-btn btn-maximize" title="Maximizar" aria-label="Maximizar">
+        <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+      </button>
+      <button id="btn-close" class="titlebar-btn btn-close" title="Cerrar" aria-label="Cerrar">
+        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.5"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       Main Layout
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="app-container">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1 class="sidebar-title">WinGet Manager</h1>
+        <p class="sidebar-subtitle">Panel de control y limpieza</p>
+      </div>
+
+      <!-- Navigation Menu -->
+      <div class="sidebar-nav">
+        <button id="nav-updates" class="nav-nav-btn active" aria-label="Ir a Actualizaciones">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          <span>Actualizaciones</span>
+        </button>
+        <button id="nav-uninstaller" class="nav-nav-btn" aria-label="Ir a Desinstalador Limpio">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
+          <span>Desinstalador</span>
+        </button>
+        <button id="nav-gpu" class="nav-nav-btn" aria-label="Ir a Gráficos y Panel de Control">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><circle cx="7.5" cy="10.5" r="2.5"/><circle cx="16.5" cy="10.5" r="2.5"/><path d="M5 17v3M8 17v3M11 17v3M16 17v3M19 17v3"/></svg>
+          <span>Gráficos & Control</span>
+        </button>
+      </div>
+
+      <!-- System Info Card -->
+      <div class="info-card glass">
+        <div class="info-card-header">
+          <svg class="info-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/><path d="M12 16v-4M12 8h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>Sistema</span>
+        </div>
+        <div id="system-info" class="info-card-body">
+          <div class="info-row"><span class="info-label">Host</span><span id="sys-host" class="info-value">—</span></div>
+          <div class="info-row"><span class="info-label">SO</span><span id="sys-os" class="info-value">—</span></div>
+        </div>
+      </div>
+
+      <!-- Updates Controls Wrapper -->
+      <div id="sidebar-updates-controls" class="sidebar-section-controls">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card glass">
+            <span id="stat-total" class="stat-number">—</span>
+            <span class="stat-label">Disponibles</span>
+          </div>
+          <div class="stat-card glass">
+            <span id="stat-selected" class="stat-number">0</span>
+            <span class="stat-label">Seleccionados</span>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          <button id="btn-scan" class="btn btn-primary" aria-label="Escanear actualizaciones">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 11-6.219-8.56" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>Escanear</span>
+          </button>
+          <button id="btn-update-selected" class="btn btn-accent" disabled aria-label="Actualizar seleccionados">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 16V8M8 12l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Actualizar Seleccionados</span>
+          </button>
+          <button id="btn-update-all" class="btn btn-danger" disabled aria-label="Actualizar todo">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Actualizar Pestaña</span>
+          </button>
+          <button id="btn-update-everything" class="btn btn-danger-outline" disabled aria-label="Actualizar todo completo (con advertencia)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Actualizar Todo (Completo)</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Uninstaller Controls Wrapper -->
+      <div id="sidebar-uninstaller-controls" class="sidebar-section-controls hidden">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card glass">
+            <span id="stat-installed-total" class="stat-number">—</span>
+            <span class="stat-label">Instaladas</span>
+          </div>
+          <div class="stat-card glass">
+            <span id="stat-installed-size" class="stat-number">—</span>
+            <span class="stat-label">Espacio Total</span>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          <button id="btn-scan-installed" class="btn btn-primary" aria-label="Escanear aplicaciones instaladas">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <span>Escanear Equipo</span>
+          </button>
+          <button id="btn-uninstall-selected" class="btn btn-danger" disabled aria-label="Desinstalar aplicaciones seleccionadas">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
+            <span>Desinstalar Seleccionadas (<span id="installed-selected-count">0</span>)</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- GPU Controls Wrapper -->
+      <div id="sidebar-gpu-controls" class="sidebar-section-controls hidden">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card glass">
+            <span id="stat-gpu-vendor" class="stat-number" style="font-size: 14px;">—</span>
+            <span class="stat-label">Fabricante</span>
+          </div>
+          <div class="stat-card glass">
+            <span id="stat-gpu-vram" class="stat-number">—</span>
+            <span class="stat-label">VRAM</span>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          <button id="btn-detect-gpu" class="btn btn-primary" aria-label="Detectar tarjeta gráfica">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+            <span>Comprobar GPU</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- Updates View -->
+      <div id="main-updates-view" class="main-view-wrapper">
+        <!-- Top Bar -->
+        <div class="topbar">
+          <div class="search-wrapper">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input id="search-input" type="text" class="search-input" placeholder="Filtrar aplicaciones..." aria-label="Buscar aplicación" />
+          </div>
+          <div class="topbar-actions">
+            <button id="btn-select-all" class="btn btn-ghost btn-sm" aria-label="Seleccionar todo">Seleccionar todo</button>
+            <button id="btn-deselect-all" class="btn btn-ghost btn-sm" aria-label="Deseleccionar todo">Deseleccionar</button>
+          </div>
+        </div>
+
+        <!-- Package Section -->
+        <div class="package-section">
+          <!-- Empty / Loading States -->
+          <div id="state-idle" class="empty-state">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <h2 class="empty-state-title">Listo para escanear</h2>
+            <p class="empty-state-desc">Haz clic en <strong>Escanear</strong> para buscar actualizaciones disponibles en tu sistema.</p>
+          </div>
+
+          <div id="state-loading" class="empty-state hidden">
+            <div class="spinner"></div>
+            <h2 class="empty-state-title">Buscando actualizaciones...</h2>
+            <p class="empty-state-desc">Consultando los repositorios de winget. Esto puede tardar unos segundos.</p>
+          </div>
+
+          <div id="state-empty" class="empty-state hidden">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <h2 class="empty-state-title">Todo está actualizado</h2>
+            <p class="empty-state-desc">No se encontraron actualizaciones disponibles para tus aplicaciones.</p>
+          </div>
+
+          <!-- Package Table -->
+          <div id="package-table-wrapper" class="package-table-wrapper hidden">
+            <!-- Category Tabs -->
+            <div class="tabs-container">
+              <button id="tab-everyday" class="tab-btn active" aria-label="Ver aplicaciones cotidianas">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                <span>Aplicaciones Cotidianas</span>
+                <span id="badge-everyday" class="tab-badge">0</span>
+              </button>
+              <button id="tab-games" class="tab-btn" aria-label="Ver juegos">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="2" y="6" width="20" height="12" rx="4"></rect><path d="M6 12h4m-2-2v4m7-1h.01m3-2h.01"></path></svg>
+                <span>Juegos</span>
+                <span id="badge-games" class="tab-badge">0</span>
+              </button>
+              <button id="tab-system" class="tab-btn" aria-label="Ver componentes del sistema">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="15" x2="23" y2="15"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="15" x2="4" y2="15"></line></svg>
+                <span>Componentes del Sistema</span>
+                <span id="badge-system" class="tab-badge">0</span>
+              </button>
+            </div>
+            <table class="package-table" aria-label="Lista de actualizaciones de paquetes">
+              <thead>
+                <tr>
+                  <th class="col-check">
+                    <input type="checkbox" id="chk-all-header" class="custom-checkbox" aria-label="Seleccionar todos" />
+                  </th>
+                  <th class="col-name">Aplicación</th>
+                  <th class="col-id">ID del Paquete</th>
+                  <th class="col-version">Versión Actual</th>
+                  <th class="col-available">Disponible</th>
+                  <th class="col-source">Fuente</th>
+                </tr>
+              </thead>
+              <tbody id="package-tbody">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Uninstaller View -->
+      <div id="main-uninstaller-view" class="main-view-wrapper hidden">
+        <!-- Top Bar -->
+        <div class="topbar">
+          <div class="search-wrapper">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input id="search-installed-input" type="text" class="search-input" placeholder="Buscar aplicaciones instaladas..." aria-label="Buscar aplicación instalada" />
+          </div>
+          <div class="topbar-actions">
+            <button id="btn-select-all-installed" class="btn btn-ghost btn-sm" aria-label="Seleccionar todo">Seleccionar todo</button>
+            <button id="btn-deselect-all-installed" class="btn btn-ghost btn-sm" aria-label="Deseleccionar todo">Deseleccionar</button>
+          </div>
+        </div>
+
+        <!-- Installed Apps List -->
+        <div id="installed-apps-section" class="package-section">
+          <!-- Empty / Loading State -->
+          <div id="state-installed-idle" class="empty-state">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </div>
+            <h2 class="empty-state-title">Listo para escanear</h2>
+            <p class="empty-state-desc">Haz clic en <strong>Escanear Equipo</strong> para cargar la lista de aplicaciones instaladas en tu sistema.</p>
+          </div>
+
+          <div id="state-installed-loading" class="empty-state hidden">
+            <div class="spinner"></div>
+            <h2 class="empty-state-title">Escaneando el equipo...</h2>
+            <p class="empty-state-desc">Consultando el registro y analizando almacenamiento de directorios. Esto puede tardar unos segundos.</p>
+          </div>
+
+          <div id="state-installed-empty" class="empty-state hidden">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path></svg>
+            </div>
+            <h2 class="empty-state-title">No se encontraron aplicaciones</h2>
+            <p class="empty-state-desc">No se encontraron programas registrados en el equipo.</p>
+          </div>
+
+          <!-- Installed Apps Table -->
+          <div id="installed-apps-table-wrapper" class="package-table-wrapper hidden">
+            <!-- Category Tabs -->
+            <div class="tabs-container">
+              <button id="tab-installed-everyday" class="tab-btn active" aria-label="Ver aplicaciones cotidianas instaladas">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                <span>Aplicaciones Cotidianas</span>
+                <span id="badge-installed-everyday" class="tab-badge">0</span>
+              </button>
+              <button id="tab-installed-games" class="tab-btn" aria-label="Ver juegos instalados">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="2" y="6" width="20" height="12" rx="4"></rect><path d="M6 12h4m-2-2v4m7-1h.01m3-2h.01"></path></svg>
+                <span>Juegos</span>
+                <span id="badge-installed-games" class="tab-badge">0</span>
+              </button>
+              <button id="tab-installed-system" class="tab-btn" aria-label="Ver componentes del sistema instalados">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="15" x2="23" y2="15"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="15" x2="4" y2="15"></line></svg>
+                <span>Componentes del Sistema</span>
+                <span id="badge-installed-system" class="tab-badge">0</span>
+              </button>
+            </div>
+            <table class="package-table" aria-label="Lista de aplicaciones instaladas">
+              <thead>
+                <tr>
+                  <th class="col-check">
+                    <input type="checkbox" id="chk-all-installed-header" class="custom-checkbox" aria-label="Seleccionar todas las aplicaciones instaladas" />
+                  </th>
+                  <th class="col-name">Aplicación</th>
+                  <th class="col-publisher">Editor</th>
+                  <th class="col-version">Versión</th>
+                  <th class="col-size">Tamaño</th>
+                  <th class="col-action">Acción</th>
+                </tr>
+              </thead>
+              <tbody id="installed-apps-tbody">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- GPU & Control Panel View -->
+      <div id="main-gpu-view" class="main-view-wrapper hidden">
+        <div class="topbar">
+          <div class="gpu-topbar-title">
+            <span class="gpu-view-title">Centro de Rendimiento y Gráficos</span>
+            <span id="gpu-topbar-model" class="gpu-topbar-model">Detectando hardware...</span>
+          </div>
+          <div class="topbar-actions">
+            <button id="btn-refresh-gpu" class="btn btn-ghost btn-sm" aria-label="Refrescar estado de GPU">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Actualizar Estado</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="package-section gpu-section">
+          <!-- Loading State -->
+          <div id="gpu-state-loading" class="gpu-state-card glass">
+            <div class="gpu-loading-spinner"></div>
+            <div class="gpu-loading-text">
+              <h3>Analizando tarjeta gráfica y controladores...</h3>
+              <p>Inspeccionando hardware, versiones de controladores y telemetría de rendimiento en tiempo real.</p>
+            </div>
+          </div>
+
+          <!-- STATE 1: Driver Installed & UP TO DATE (Shows Details & Metrics) -->
+          <div id="gpu-state-uptodate" class="gpu-state-container hidden">
+            <!-- Hero Card: GPU Details -->
+            <div class="gpu-dashboard-hero glass">
+              <div class="gpu-hero-glow"></div>
+              <div class="gpu-hero-top">
+                <div class="gpu-hero-brand-wrap">
+                  <div id="gpu-detail-icon" class="gpu-icon-circle icon-nvidia">
+                    <!-- SVG Logo dynamically updated -->
+                  </div>
+                  <div class="gpu-hero-names">
+                    <div class="gpu-hero-tag-row">
+                      <span id="gpu-detail-vendor-tag" class="gpu-vendor-tag">NVIDIA GeForce RTX</span>
+                      <span id="gpu-detail-status-pill" class="gpu-status-badge badge-uptodate">
+                        <span class="status-pulse-dot"></span>
+                        Controlador Al Día
+                      </span>
+                    </div>
+                    <h2 id="gpu-detail-name" class="gpu-main-name">NVIDIA GeForce RTX 5070 Ti</h2>
+                    <span id="gpu-detail-arch" class="gpu-arch-label">Arquitectura Dedicada • Controladores Oficiales Activos</span>
+                  </div>
+                </div>
+                <div class="gpu-hero-actions">
+                  <button id="btn-launch-cpl-hero" class="btn btn-accent btn-sm btn-glow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span id="btn-launch-cpl-text">Abrir Panel de Control</span>
+                  </button>
+                  <button id="btn-check-updates-hero" class="btn btn-ghost btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                    <span>Comprobar Actualizaciones</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Driver Status Banner -->
+              <div class="gpu-driver-status-card">
+                <div class="gpu-driver-status-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+                </div>
+                <div class="gpu-driver-status-info">
+                  <div class="gpu-driver-version-row">
+                    <span class="gpu-driver-title">Versión del Controlador:</span>
+                    <span id="gpu-driver-ver-badge" class="gpu-driver-ver-badge">v610.88 Game Ready (WHQL)</span>
+                    <span id="gpu-driver-date" class="gpu-driver-date">Publicado: 22/07/2026</span>
+                  </div>
+                  <p id="gpu-driver-status-subtext" class="gpu-driver-status-subtext">Tu tarjeta gráfica dispone de los controladores oficiales más recientes y compatibles con aceleración de trazado de rayos, DLSS/FSR y DirectX 12 Ultimate.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Real-time Hardware Metrics & Specs Grid -->
+            <div class="gpu-metrics-header-wrap">
+              <div class="gpu-metrics-title">
+                <h3>Métricas de Rendimiento y Hardware</h3>
+                <span class="gpu-metrics-sub">Monitorización en tiempo real del subsistema de vídeo</span>
+              </div>
+            </div>
+
+            <div class="gpu-metrics-grid">
+              <!-- Metric 1: VRAM -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Memoria Gráfica VRAM</span>
+                  <div class="metric-tile-icon vram-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-vram-total" class="metric-tile-value">16.0 GB</span>
+                  <span class="metric-tile-unit">Dedicada</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div id="metric-vram-bar" class="metric-progress-bar" style="width: 10%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span id="metric-vram-used" class="metric-footer-text">1.6 GB en uso</span>
+                  <span class="metric-status-pill pill-good">Disponible</span>
+                </div>
+              </div>
+
+              <!-- Metric 2: Temperature -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Temperatura GPU</span>
+                  <div class="metric-tile-icon temp-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-temp-val" class="metric-tile-value">49 °C</span>
+                  <span class="metric-tile-unit">Núcleo</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div id="metric-temp-bar" class="metric-progress-bar bar-temp" style="width: 45%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span class="metric-footer-text">Límite térmico: 88 °C</span>
+                  <span id="metric-temp-pill" class="metric-status-pill pill-cool">Fresca</span>
+                </div>
+              </div>
+
+              <!-- Metric 3: Power / Consumption -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Consumo de Energía</span>
+                  <div class="metric-tile-icon power-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-power-val" class="metric-tile-value">39 W</span>
+                  <span id="metric-power-limit" class="metric-tile-unit">/ 300 W TGP</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div id="metric-power-bar" class="metric-progress-bar bar-power" style="width: 13%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span class="metric-footer-text">Modo reposo / 2D</span>
+                  <span class="metric-status-pill pill-good">Eficiente</span>
+                </div>
+              </div>
+
+              <!-- Metric 4: GPU Utilization -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Carga de GPU</span>
+                  <div class="metric-tile-icon load-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-util-val" class="metric-tile-value">5 %</span>
+                  <span class="metric-tile-unit">Uso</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div id="metric-util-bar" class="metric-progress-bar bar-util" style="width: 5%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span class="metric-footer-text">Aceleración activa</span>
+                  <span class="metric-status-pill pill-cool">Mínima carga</span>
+                </div>
+              </div>
+
+              <!-- Metric 5: Display & Resolution -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Pantalla y Frecuencia</span>
+                  <div class="metric-tile-icon display-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-display-res" class="metric-tile-value">1920 × 1080</span>
+                  <span id="metric-display-hz" class="metric-tile-unit">@ 144 Hz</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div class="metric-progress-bar bar-display" style="width: 100%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span class="metric-footer-text">Tasa de refresco alta</span>
+                  <span class="metric-status-pill pill-good">Fluido</span>
+                </div>
+              </div>
+
+              <!-- Metric 6: Control Software Status -->
+              <div class="gpu-metric-tile glass">
+                <div class="metric-tile-header">
+                  <span class="metric-tile-label">Panel de Control Activo</span>
+                  <div class="metric-tile-icon cpl-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                  </div>
+                </div>
+                <div class="metric-tile-main">
+                  <span id="metric-cpl-name" class="metric-tile-value" style="font-size: 15px;">NVIDIA Control Panel</span>
+                </div>
+                <div class="metric-progress-wrap">
+                  <div class="metric-progress-bar bar-cpl" style="width: 100%;"></div>
+                </div>
+                <div class="metric-tile-footer">
+                  <span id="metric-cpl-sub" class="metric-footer-text">v8.1.969.0 (Oficial)</span>
+                  <button id="btn-quick-open-cpl" class="metric-action-btn">Abrir</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapsible: Advanced & Additional Suites (Hidden by default to avoid clutter!) -->
+            <div class="gpu-collapsible-wrapper">
+              <button id="btn-toggle-advanced-suites" class="btn-collapsible-toggle" aria-expanded="false">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="chevron-icon"><polyline points="6 9 12 15 18 9"/></svg>
+                <span>Herramientas opcionales de software y suites avanzadas</span>
+              </button>
+              <div id="gpu-optional-suites-container" class="gpu-optional-suites-container hidden">
+                <div id="gpu-optional-suites-grid" class="gpu-suites-grid">
+                  <!-- Populated dynamically with secondary suites -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STATE 2: Driver Has UPDATE AVAILABLE -->
+          <div id="gpu-state-update" class="gpu-state-container hidden">
+            <div class="gpu-update-banner-card glass">
+              <div class="update-banner-glow"></div>
+              <div class="update-banner-content">
+                <div class="update-banner-badge">
+                  <span class="status-pulse-dot pulse-warning"></span>
+                  ¡Nueva Actualización de Controlador Gráfico Disponible!
+                </div>
+                <h2 id="update-banner-gpu-name" class="update-banner-title">NVIDIA GeForce RTX 5070 Ti</h2>
+                
+                <div class="update-version-comparator">
+                  <div class="comparator-box current">
+                    <span class="comparator-label">Versión Actual Instalada</span>
+                    <span id="update-current-ver" class="comparator-val">v610.88</span>
+                  </div>
+                  <div class="comparator-arrow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                  </div>
+                  <div class="comparator-box latest">
+                    <span class="comparator-label">Nueva Versión Disponible</span>
+                    <span id="update-new-ver" class="comparator-val">v612.44 Game Ready</span>
+                  </div>
+                </div>
+
+                <div class="update-highlights">
+                  <h4>Mejoras y optimizaciones incluidas:</h4>
+                  <ul id="update-notes-list">
+                    <li>Soporte y perfiles Game Ready optimizados para los juegos más recientes.</li>
+                    <li>Mejoras en el rendimiento de Ray Tracing y reducción de latencia del sistema.</li>
+                    <li>Parches de seguridad y estabilidad certificados por Microsoft (WHQL).</li>
+                  </ul>
+                </div>
+
+                <div class="update-banner-actions">
+                  <button id="btn-update-driver-now" class="btn btn-primary btn-lg btn-glow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    <span>Descargar e Instalar Actualización Oficial</span>
+                  </button>
+                  <button id="btn-view-gpu-details-anyway" class="btn btn-ghost btn-lg">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    <span>Ver detalles y telemetría de la GPU</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STATE 3: Driver NOT INSTALLED (Missing / Generic Display Adapter) -->
+          <div id="gpu-state-no-driver" class="gpu-state-container hidden">
+            <div class="gpu-no-driver-alert glass">
+              <div class="no-driver-icon-box">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div class="no-driver-alert-text">
+                <span class="no-driver-tag">Controlador Oficial No Detectado</span>
+                <h3 id="no-driver-detected-title">Tu tarjeta gráfica está funcionando con controladores genéricos básicos</h3>
+                <p>Windows está utilizando un adaptador de pantalla genérico. Para disfrutar de aceleración 3D en videojuegos, máxima resolución, tasas de refresco altas y el panel de control oficial, instala la suite recomendada para tu hardware a continuación.</p>
+              </div>
+            </div>
+
+            <div class="gpu-suites-header">
+              <h3 id="no-driver-suites-heading">Suites Oficiales Recomendadas para tu GPU</h3>
+              <p>Selecciona una opción para descargar e instalar los controladores certificados directamente en tu equipo.</p>
+            </div>
+
+            <div id="gpu-install-suites-grid" class="gpu-suites-grid">
+              <!-- Populated dynamically with clean installation cards -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Status & Progress Bar -->
+      <footer id="bottom-status-bar" class="bottom-status-bar glass">
+        <div class="status-left">
+          <div id="status-indicator" class="status-indicator">
+            <span class="status-dot"></span>
+          </div>
+          <div class="status-info">
+            <span id="progress-text" class="status-text">Listo</span>
+            <span id="status-subtext" class="status-subtext">Sistema preparado</span>
+          </div>
+          <button id="btn-force-clean" class="btn btn-warning btn-xs hidden" style="margin-left: 12px; font-size: 11px; padding: 4px 10px; border-radius: 4px; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; cursor: pointer;" title="Haz clic aquí si el desinstalador oficial ya se cerró para proceder inmediatamente con el escaneo y purga">El desinstalador ya terminó → Limpieza profunda</button>
+        </div>
+        <div class="status-right">
+          <div class="progress-details">
+            <span id="progress-pct" class="progress-percentage"></span>
+          </div>
+          <div class="progress-track-wrapper">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+        </div>
+      </footer>
+
+    </main>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
+
+  <!-- Premium Confirmation Dialog Modal -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <svg class="modal-warning-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="modal-title">Advertencia de Seguridad</span>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-modal-text">¿Estás seguro de que deseas realizar esta operación? La actualización de componentes críticos del sistema puede desestabilizar el equipo o provocar fallos inesperados.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-modal-cancel" class="btn btn-ghost">Cancelar</button>
+        <button id="btn-modal-confirm" class="btn btn-danger">Confirmar y Actualizar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
