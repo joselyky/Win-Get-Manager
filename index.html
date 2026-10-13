@@ -628,6 +628,43 @@
         </div>
       </div>
 
+      <!-- ══════════════════════════════════════════════════════════════
+           Live Update & Download Queue Drawer
+      ═══════════════════════════════════════════════════════════════ -->
+      <div id="queue-drawer" class="queue-drawer glass hidden">
+        <div class="queue-header">
+          <div class="queue-header-left">
+            <div class="queue-icon-pulse">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            </div>
+            <div class="queue-title-wrap">
+              <span class="queue-title">Cola de Actualizaciones y Descargas</span>
+              <span id="queue-summary-text" class="queue-subtitle">0 en proceso</span>
+            </div>
+          </div>
+          <div class="queue-header-right">
+            <div id="queue-global-stat" class="queue-global-stat hidden">
+              <span id="queue-global-mb" class="queue-stat-badge">0.0 MB / 0.0 MB</span>
+            </div>
+            <button id="btn-toggle-queue-collapse" class="btn-queue-toggle" title="Minimizar / Expandir lista" aria-label="Minimizar o expandir lista">
+              <svg id="queue-toggle-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <button id="btn-close-queue" class="btn-queue-close" title="Cerrar panel de cola" aria-label="Cerrar panel de cola">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="queue-items-container" class="queue-items-container">
+          <div id="queue-items-list" class="queue-items-list">
+            <!-- Populated dynamically with live item cards -->
+          </div>
+        </div>
+      </div>
+
       <!-- Bottom Status & Progress Bar -->
       <footer id="bottom-status-bar" class="bottom-status-bar glass">
         <div class="status-left">
@@ -638,6 +675,10 @@
             <span id="progress-text" class="status-text">Listo</span>
             <span id="status-subtext" class="status-subtext">Sistema preparado</span>
           </div>
+          <button id="btn-status-queue-toggle" class="btn-status-queue hidden" aria-label="Ver cola de descargas">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span id="status-queue-label">Cola (0)</span>
+          </button>
           <button id="btn-force-clean" class="btn btn-warning btn-xs hidden" style="margin-left: 12px; font-size: 11px; padding: 4px 10px; border-radius: 4px; background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; cursor: pointer;" title="Haz clic aquí si el desinstalador oficial ya se cerró para proceder inmediatamente con el escaneo y purga">El desinstalador ya terminó → Limpieza profunda</button>
         </div>
         <div class="status-right">

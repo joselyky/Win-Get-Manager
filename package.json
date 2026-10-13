@@ -1,6 +1,6 @@
 {
   "name": "winget-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Panel de control para gestionar actualizaciones de software via winget",
   "main": "main.js",
   "author": "WinGet Manager",
@@ -8,9 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64",
-    "build:installer": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis --x64",
-    "build:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable --x64"
+    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64"
   },
   "dependencies": {
     "electron-store": "^8.1.0"
@@ -50,9 +48,17 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "WinGet Manager",
-      "uninstallDisplayName": "WinGet Manager"
+      "include": "build/installer.nsh"
     },
+    "extraResources": [
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "files": [
       "**/*",
       "!node_modules/**/*",

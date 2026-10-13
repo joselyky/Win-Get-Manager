@@ -51,6 +51,17 @@ const badgeEveryday      = document.getElementById('badge-everyday');
 const badgeGames         = document.getElementById('badge-games');
 const badgeSystem        = document.getElementById('badge-system');
 
+// Queue UI elements
+const queueDrawer             = document.getElementById('queue-drawer');
+const queueSummaryText        = document.getElementById('queue-summary-text');
+const queueGlobalStat         = document.getElementById('queue-global-stat');
+const queueGlobalMb           = document.getElementById('queue-global-mb');
+const btnToggleQueueCollapse  = document.getElementById('btn-toggle-queue-collapse');
+const btnCloseQueue           = document.getElementById('btn-close-queue');
+const queueItemsList          = document.getElementById('queue-items-list');
+const btnStatusQueueToggle    = document.getElementById('btn-status-queue-toggle');
+const statusQueueLabel        = document.getElementById('status-queue-label');
+
 // ─── State ─────────────────────────────────────────────────────────────────────
 let allPackages = [];        // Full list from winget
 let filteredPackages = [];   // Subset after search filter
@@ -61,6 +72,8 @@ let currentTab = 'everyday';
 let currentInstalledTab = 'everyday';
 let selectedPackageIds = new Set();
 let selectedInstalledAppIds = new Set();
+let currentQueueItems = [];
+let sessionCompletedPkgIds = new Set();
 
 let allInstalledApps = [];   // List of installed apps
 let filteredInstalledApps = []; // Subset after search filter
@@ -75,6 +88,7 @@ async function init() {
   bindNavigation();
   bindUninstallerControls();
   bindGpuControls();
+  bindQueueEvents();
   await loadSystemInfo();
 }
 
@@ -87,7 +101,7 @@ function bindWindowControls() {
 
 // ─── Action Buttons ────────────────────────────────────────────────────────────
 function bindActionButtons() {
-  if (btnScan) btnScan.addEventListener('click', handleScan);
+  if (btnScan) btnScan.addEventListener('click', () => handleScan(true));
   if (btnUpdateSelected) btnUpdateSelected.addEventListener('click', handleUpdateSelected);
   if (btnUpdateAll) btnUpdateAll.addEventListener('click', handleUpdateAll);
   if (btnUpdateEverything) {
@@ -96,6 +110,287 @@ function bindActionButtons() {
   if (btnSelectAll) btnSelectAll.addEventListener('click', () => setAllCheckboxes(true));
   if (btnDeselectAll) btnDeselectAll.addEventListener('click', () => setAllCheckboxes(false));
   if (chkAllHeader) chkAllHeader.addEventListener('change', () => setAllCheckboxes(chkAllHeader.checked));
+}
+
+// ─── Live Download & Update Queue ─────────────────────────────────────────────
+function bindQueueEvents() {
+  if (btnToggleQueueCollapse && queueDrawer) {
+    btnToggleQueueCollapse.addEventListener('click', () => {
+      queueDrawer.classList.toggle('collapsed');
+    });
+  }
+  if (btnCloseQueue && queueDrawer) {
+    btnCloseQueue.addEventListener('click', () => {
+      queueDrawer.classList.add('hidden');
+    });
+  }
+  if (btnStatusQueueToggle && queueDrawer) {
+    btnStatusQueueToggle.addEventListener('click', () => {
+      queueDrawer.classList.toggle('hidden');
+      queueDrawer.classList.remove('collapsed');
+    });
+  }
+
+  if (window.electronAPI && window.electronAPI.onQueueInit) {
+    window.electronAPI.onQueueInit(data => {
+      initQueueUI(data.queue || []);
+    });
+  }
+
+  if (window.electronAPI && window.electronAPI.onQueueUpdate) {
+    window.electronAPI.onQueueUpdate(data => {
+      updateQueueUI(data);
+    });
+  }
+}
+
+function escapeQueueId(id) {
+  return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function initQueueUI(items) {
+  currentQueueItems = items;
+  if (!queueDrawer || !queueItemsList) return;
+
+  queueItemsList.innerHTML = '';
+  queueDrawer.classList.remove('hidden');
+  queueDrawer.classList.remove('collapsed');
+  if (btnStatusQueueToggle) {
+    btnStatusQueueToggle.classList.remove('hidden');
+    if (statusQueueLabel) statusQueueLabel.textContent = `Cola: 0/${items.length}`;
+  }
+  if (queueSummaryText) {
+    queueSummaryText.textContent = `0 de ${items.length} completados`;
+  }
+  if (queueGlobalStat) {
+    queueGlobalStat.classList.remove('hidden');
+  }
+
+  items.forEach((item) => {
+    const card = document.createElement('div');
+    const safeId = escapeQueueId(item.id);
+    card.id = `queue-card-${safeId}`;
+    card.className = 'queue-item-card glass';
+
+    const iconHtml = (item.iconBase64 && item.iconBase64.length > 50)
+      ? `<img src="data:image/png;base64,${item.iconBase64}" alt="" />`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>`;
+
+    const verHtml = item.version
+      ? `v${sanitize(item.version)} <span class="ver-arrow">→</span> <span class="ver-target">v${sanitize(item.available || 'nueva')}</span>`
+      : `<span class="ver-target">v${sanitize(item.available || 'nueva')}</span>`;
+
+    card.innerHTML = `
+      <div class="queue-item-header">
+        <div class="queue-item-left">
+          <div class="queue-item-icon-box">${iconHtml}</div>
+          <div class="queue-item-meta">
+            <span class="queue-item-name" title="${sanitize(item.name || item.id)}">${sanitize(item.name || item.id)}</span>
+            <span class="queue-item-versions">${verHtml}</span>
+          </div>
+        </div>
+        <div id="queue-badge-${safeId}" class="queue-status-badge badge-pending">
+          <span class="status-badge-text">En cola</span>
+        </div>
+      </div>
+      <div class="queue-progress-track">
+        <div id="queue-fill-${safeId}" class="queue-progress-fill" style="width: 0%;"></div>
+      </div>
+      <div class="queue-progress-stats">
+        <span id="queue-bytes-${safeId}" class="stat-mb-val">0.0 MB / —</span>
+        <span id="queue-speed-${safeId}" class="stat-speed">0.0 MB/s</span>
+        <span id="queue-pct-${safeId}" class="stat-pct">0%</span>
+      </div>
+      <div id="queue-actions-${safeId}" class="queue-card-actions hidden"></div>
+    `;
+
+    queueItemsList.appendChild(card);
+  });
+
+  // Bind queue action buttons once
+  if (queueItemsList && !queueItemsList.dataset.boundActions) {
+    queueItemsList.dataset.boundActions = 'true';
+    queueItemsList.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.btn-queue-action');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const pkgId = btn.dataset.pkgId;
+      const pkg = currentQueueItems.find(i => i.id === pkgId);
+      if (!pkg) return;
+
+      const safeId = escapeQueueId(pkgId);
+      const actionsEl = document.getElementById(`queue-actions-${safeId}`);
+      if (actionsEl) actionsEl.classList.add('hidden');
+
+      if (action === 'admin') {
+        showToast(`Solicitando autorización de Administrador para ${pkg.name || pkg.id}...`, 'info');
+        window.electronAPI.upgradePackageElevated(pkg);
+      } else if (action === 'kill-retry') {
+        showToast(`Cerrando procesos de ${pkg.name || pkg.id}...`, 'info');
+        await window.electronAPI.killProcess(pkg.id);
+        showToast(`Reintentando actualización de ${pkg.name || pkg.id}...`, 'info');
+        window.electronAPI.upgradePackages([pkg]);
+      } else if (action === 'retry') {
+        showToast(`Reintentando actualización de ${pkg.name || pkg.id}...`, 'info');
+        window.electronAPI.upgradePackages([pkg]);
+      }
+    });
+  }
+}
+
+function updateQueueUI(data) {
+  const safeId = escapeQueueId(data.pkgId);
+  const card = document.getElementById(`queue-card-${safeId}`);
+  const badge = document.getElementById(`queue-badge-${safeId}`);
+  const fill = document.getElementById(`queue-fill-${safeId}`);
+  const bytesEl = document.getElementById(`queue-bytes-${safeId}`);
+  const speedEl = document.getElementById(`queue-speed-${safeId}`);
+  const pctEl = document.getElementById(`queue-pct-${safeId}`);
+  const actionsEl = document.getElementById(`queue-actions-${safeId}`);
+
+  if (!card) return;
+
+  // Clear state classes
+  card.classList.remove('item-downloading', 'item-installing', 'item-completed', 'item-error');
+  if (actionsEl) {
+    actionsEl.classList.add('hidden');
+    actionsEl.innerHTML = '';
+  }
+
+  const totalMbText = (data.totalMB && data.totalMB !== '—') ? `${data.totalMB} MB` : 'Calculando...';
+
+  if (data.status === 'starting') {
+    card.classList.add('item-downloading');
+    if (badge) {
+      badge.className = 'queue-status-badge badge-downloading';
+      badge.innerHTML = '<span class="status-pulse-dot pulse-primary"></span><span>Conectando...</span>';
+    }
+    if (bytesEl) bytesEl.textContent = 'Iniciando descarga...';
+    if (speedEl) speedEl.textContent = '—';
+    if (pctEl) pctEl.textContent = '0%';
+  } else if (data.status === 'downloading') {
+    card.classList.add('item-downloading');
+    if (badge) {
+      badge.className = 'queue-status-badge badge-downloading';
+      badge.innerHTML = '<span class="status-pulse-dot pulse-primary"></span><span>Descargando</span>';
+    }
+    if (fill) fill.style.width = `${data.percent}%`;
+    if (bytesEl) bytesEl.textContent = `${data.downloadedMB} MB / ${totalMbText}`;
+    if (speedEl) speedEl.textContent = `${data.speedMBs || '0.0'} MB/s`;
+    if (pctEl) pctEl.textContent = `${data.percent}%`;
+
+    // Also update bottom status bar in sync
+    const currentPkg = currentQueueItems.find(i => i.id === data.pkgId);
+    const pName = currentPkg ? currentPkg.name : data.pkgId;
+    setStatusBar(`Descargando: ${pName}`, `${data.downloadedMB} MB de ${totalMbText} (${data.percent}%) • ${data.speedMBs || '0.0'} MB/s`, Math.round(data.percent), 'busy');
+  } else if (data.status === 'installing') {
+    card.classList.add('item-installing');
+    if (badge) {
+      badge.className = 'queue-status-badge badge-installing';
+      badge.innerHTML = '<span class="status-pulse-dot pulse-warning"></span><span>Instalando</span>';
+    }
+    if (fill) fill.style.width = '100%';
+    if (bytesEl) bytesEl.textContent = data.message || `${data.downloadedMB || 'Descarga lista'} (${totalMbText})`;
+    if (speedEl) speedEl.textContent = 'Instalando...';
+    if (pctEl) pctEl.textContent = '100%';
+
+    const currentPkg = currentQueueItems.find(i => i.id === data.pkgId);
+    const pName = currentPkg ? currentPkg.name : data.pkgId;
+    setStatusBar(`Instalando: ${pName}`, data.message || 'Ejecutando instalador oficial de Windows...', 100, 'busy');
+  } else if (data.status === 'completed') {
+    card.classList.add('item-completed');
+    sessionCompletedPkgIds.add(data.pkgId);
+
+    // Immediately remove from pending table so the user sees live progress
+    allPackages = allPackages.filter(p => p.id !== data.pkgId);
+    filteredPackages = filteredPackages.filter(p => p.id !== data.pkgId);
+    selectedPackageIds.delete(data.pkgId);
+    renderPackageTable(filteredPackages);
+    updateStats();
+
+    if (badge) {
+      badge.className = 'queue-status-badge badge-completed';
+      badge.innerHTML = '<span>Completado ✔</span>';
+    }
+    if (fill) fill.style.width = '100%';
+    if (bytesEl) bytesEl.textContent = data.message || `${data.downloadedMB || totalMbText} (Descargado)`;
+    if (speedEl) speedEl.textContent = 'Listo';
+    if (pctEl) pctEl.textContent = '100%';
+  } else if (data.status === 'error' || data.status === 'in-use' || data.status === 'admin-needed') {
+    card.classList.add('item-error');
+    const isAdmin = data.status === 'admin-needed' || data.errorType === 'admin';
+    const isInUse = data.status === 'in-use' || data.errorType === 'in-use';
+
+    if (badge) {
+      if (isAdmin) {
+        badge.className = 'queue-status-badge badge-admin';
+        badge.innerHTML = '<span>Requiere Admin 🛡</span>';
+      } else if (isInUse) {
+        badge.className = 'queue-status-badge badge-in-use';
+        badge.innerHTML = '<span>App en uso ⚠</span>';
+      } else {
+        badge.className = 'queue-status-badge badge-error';
+        badge.innerHTML = '<span>Error ✖</span>';
+      }
+    }
+    if (bytesEl) bytesEl.textContent = data.message || 'Error en la actualización';
+    if (speedEl) speedEl.textContent = 'Detenido';
+    if (pctEl) pctEl.textContent = '—';
+
+    // Show actionable resolution buttons
+    if (actionsEl) {
+      actionsEl.classList.remove('hidden');
+      if (isAdmin) {
+        actionsEl.innerHTML = `
+          <button class="btn-queue-action btn-queue-action-admin" data-action="admin" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Instalar como Administrador
+          </button>
+          <button class="btn-queue-action btn-queue-action-retry" data-action="retry" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            Reintentar
+          </button>
+        `;
+      } else if (isInUse) {
+        actionsEl.innerHTML = `
+          <button class="btn-queue-action btn-queue-action-kill" data-action="kill-retry" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Cerrar app y Reintentar
+          </button>
+          <button class="btn-queue-action btn-queue-action-retry" data-action="retry" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            Reintentar
+          </button>
+        `;
+      } else {
+        actionsEl.innerHTML = `
+          <button class="btn-queue-action btn-queue-action-retry" data-action="retry" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            Reintentar
+          </button>
+          <button class="btn-queue-action btn-queue-action-admin" data-action="admin" data-pkg-id="${data.pkgId}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Probar como Administrador
+          </button>
+        `;
+      }
+    }
+  }
+
+  // Update overall queue counters
+  if (queueItemsList) {
+    const completedCount = queueItemsList.querySelectorAll('.item-completed').length;
+    const totalCount = currentQueueItems.length;
+    if (statusQueueLabel) {
+      statusQueueLabel.textContent = `Cola: ${completedCount}/${totalCount} (${data.percent || 0}%)`;
+    }
+    if (queueSummaryText) {
+      queueSummaryText.textContent = `${completedCount} de ${totalCount} completados`;
+    }
+    if (queueGlobalMb && data.downloadedMB) {
+      queueGlobalMb.textContent = `${data.downloadedMB} MB descargados`;
+    }
+  }
 }
 
 // ─── Search Filter ─────────────────────────────────────────────────────────────
@@ -148,8 +443,12 @@ async function loadSystemInfo() {
 }
 
 // ─── Scan for Upgrades ─────────────────────────────────────────────────────────
-async function handleScan() {
+async function handleScan(manualTrigger = false) {
   if (isUpdating) return;
+
+  if (manualTrigger) {
+    sessionCompletedPkgIds.clear();
+  }
 
   setUIBusy(true, 'scan');
   showState('loading');
@@ -163,7 +462,8 @@ async function handleScan() {
       throw new Error(result.error ?? 'Error desconocido al ejecutar winget.');
     }
 
-    allPackages = result.packages ?? [];
+    const rawPackages = result.packages ?? [];
+    allPackages = rawPackages.filter(pkg => !sessionCompletedPkgIds.has(pkg.id));
     filteredPackages = [...allPackages];
     searchInput.value = '';
     selectedPackageIds.clear();
@@ -314,6 +614,10 @@ function handleUpdateAll() {
 
     window.electronAPI.upgradePackages(activePackages.map(pkg => ({
       id: pkg.id,
+      name: pkg.name || pkg.id,
+      version: pkg.version || '',
+      available: pkg.available || '',
+      iconBase64: pkg.iconBase64 || '',
       source: pkg.source || 'winget'
     })));
   };
@@ -372,6 +676,10 @@ function handleUpdateEverything() {
 
     window.electronAPI.upgradePackages(allPackages.map(pkg => ({
       id: pkg.id,
+      name: pkg.name || pkg.id,
+      version: pkg.version || '',
+      available: pkg.available || '',
+      iconBase64: pkg.iconBase64 || '',
       source: pkg.source || 'winget'
     })));
   });
@@ -834,6 +1142,10 @@ function getSelectedPackages() {
     .filter(pkg => selectedPackageIds.has(pkg.id))
     .map(pkg => ({
       id: pkg.id,
+      name: pkg.name || pkg.id,
+      version: pkg.version || '',
+      available: pkg.available || '',
+      iconBase64: pkg.iconBase64 || '',
       source: pkg.source || 'winget'
     }));
 }
@@ -1412,7 +1724,20 @@ function handleUninstallClean(app) {
   if (isUpdating) return;
 
   const isSys = isSystemPackage(app);
-  const warningMsg = `⚠️ ADVERTENCIA DE SEGURIDAD\n\n¿Estás seguro de que deseas desinstalar de forma limpia "${app.name}"?\n\n• Se ejecutará el desinstalador oficial del programa.\n• Se buscarán y eliminarán permanentemente todas las carpetas residuales en AppData, ProgramData y Temp.${isSys ? '\n\n🔴 PRECAUCIÓN: Este es un componente del sistema o controlador. Desinstalarlo podría afectar el funcionamiento de Windows.' : ''}`;
+  const uninstStr = (app.uninstallString || '').toLowerCase();
+  const installLoc = (app.installLocation || '').toLowerCase();
+  const isEpic = uninstStr.includes('com.epicgames.launcher') || installLoc.includes('\\epic games\\') || (app.id && app.id.toLowerCase().startsWith('epicgames.'));
+  const isSteam = uninstStr.includes('steam://') || uninstStr.includes('steam.exe') || (app.id && app.id.toLowerCase().startsWith('steam app '));
+
+  let warningMsg = `⚠️ ADVERTENCIA DE SEGURIDAD\n\n¿Estás seguro de que deseas desinstalar de forma limpia "${app.name}"?\n\n• Se ejecutará el desinstalador oficial del programa.\n• Se buscarán y limpiarán de forma segura los residuos huérfanos específicos de esta aplicación.`;
+
+  if (isEpic) {
+    warningMsg = `🎮 DESINSTALACIÓN DE JUEGO (Epic Games)\n\n¿Deseas desinstalar "${app.name}"?\n\n• Se abrirá Epic Games Launcher para retirar el juego.\n• 🛡️ ESCUDO ACTIVO: Epic Games Launcher y el resto de tu biblioteca están completamente protegidos.\n• Se limpiarán únicamente datos residuales específicos de "${app.name}".`;
+  } else if (isSteam) {
+    warningMsg = `🎮 DESINSTALACIÓN DE JUEGO (Steam)\n\n¿Deseas desinstalar "${app.name}"?\n\n• Se abrirá el protocolo de Steam para retirar el juego.\n• 🛡️ ESCUDO ACTIVO: El cliente Steam y tus demás juegos están completamente protegidos.\n• Se limpiarán únicamente residuos propios de "${app.name}".`;
+  } else if (isSys) {
+    warningMsg += `\n\n🔴 PRECAUCIÓN: Este es un componente del sistema o controlador. Desinstalarlo podría afectar el funcionamiento de Windows.`;
+  }
 
   showConfirmationModal(warningMsg, () => {
     isUpdating = true;
@@ -1427,7 +1752,7 @@ function handleUninstallClean(app) {
       btnForceClean.classList.remove('hidden');
       btnForceClean.onclick = () => {
         btnForceClean.classList.add('hidden');
-        setStatusBar(`Limpiando residuos de ${app.name}...`, 'Forzando escaneo heurístico y purga profunda...', 70, 'busy');
+        setStatusBar(`Limpiando residuos de ${app.name}...`, 'Procediendo con escaneo seguro de residuos...', 75, 'busy');
         if (window.electronAPI.forceProceedCleanup) {
           window.electronAPI.forceProceedCleanup();
         }
@@ -1435,21 +1760,21 @@ function handleUninstallClean(app) {
     }
 
     clearLog();
-    setStatusBar(`Desinstalando ${app.name}...`, 'Ejecutando desinstalador oficial (completa el asistente si aparece)...', 30, 'busy');
+    setStatusBar(`Desinstalando ${app.name}...`, 'Ejecutando desinstalador oficial...', 30, 'busy');
 
     window.electronAPI.removeAllListeners('apps:uninstall-log');
     window.electronAPI.removeAllListeners('apps:uninstall-done');
 
     window.electronAPI.onUninstallLog((data) => {
       appendLog(data.type, data.text);
-      if (data.text.includes('Detectado juego de Steam')) {
-        setStatusBar(`Desinstalando ${app.name}...`, 'Confirma la desinstalación en la ventana de Steam si aparece...', 50, 'busy');
-      } else if (data.text.includes('FASE 3') || data.text.includes('Buscando carpetas residuales')) {
+      if (data.text.includes('Detectado juego de Epic Games') || data.text.includes('Detectado juego de Steam')) {
+        setStatusBar(`Desinstalando ${app.name}...`, 'Confirma en la ventana del lanzador si aparece...', 50, 'busy');
+      } else if (data.text.includes('FASE 3') || data.text.includes('Inspeccionando almacenamiento')) {
         if (btnForceClean) btnForceClean.classList.add('hidden');
-        setStatusBar(`Limpiando residuos de ${app.name}...`, 'Buscando y eliminando datos residuales en Registro y Disco...', 70, 'busy');
-      } else if (data.text.includes('Eliminando residuo:') || data.text.includes('Purgando clave')) {
-        const pathPart = data.text.replace(/Eliminando residuo:|Purgando clave de registro residual:/g, '').trim();
-        setStatusBar(`Limpiando: ${app.name}`, pathPart, 85, 'busy');
+        setStatusBar(`Limpiando residuos de ${app.name}...`, 'Buscando y eliminando datos residuales de forma segura...', 75, 'busy');
+      } else if (data.text.includes('Eliminando residuo') || data.text.includes('Purgando clave')) {
+        const pathPart = data.text.replace(/Eliminando residuo seguro en disco:|Purgando clave residual del juego en .*?:|Purgando clave de registro residual:/g, '').trim();
+        setStatusBar(`Limpiando: ${app.name}`, pathPart, 88, 'busy');
       }
     });
 
@@ -1470,7 +1795,7 @@ function handleUninstallClean(app) {
         renderInstalledAppsTable(filteredInstalledApps);
         updateInstalledSelectionStats();
 
-        setStatusBar('Desinstalación completada', `Se eliminó ${app.name} y todos sus residuos.`, 100, 'idle');
+        setStatusBar('Desinstalación completada', `Se retiró ${app.name} y sus residuos de forma segura.`, 100, 'idle');
         showToast(`Se desinstaló ${app.name} correctamente.`, 'success');
       } else {
         setStatusBar('Desinstalación no completada', 'El desinstalador fue cancelado o falló.', 0, 'error');
@@ -1500,7 +1825,7 @@ function handleUninstallSelected() {
   const moreCountStr = selectedApps.length > 10 ? `\n... y ${selectedApps.length - 10} aplicaciones más` : '';
   const hasSystem = selectedApps.some(a => isSystemPackage(a));
 
-  const warningMsg = `⚠️ ADVERTENCIA DE DESINSTALACIÓN EN LOTE (5s)\n\n¿Estás seguro de que deseas desinstalar de forma limpia las siguientes ${selectedApps.length} aplicaciones seleccionadas?\n\n${appListStr}${moreCountStr}\n\n• Se ejecutarán los desinstaladores de cada programa de forma secuencial.\n• Se limpiarán todos los residuos y carpetas temporales asociadas en AppData, ProgramData y Temp.${hasSystem ? '\n\n🔴 ATENCIÓN: Has seleccionado componentes del sistema o controladores sensibles.' : ''}`;
+  const warningMsg = `⚠️ ADVERTENCIA DE DESINSTALACIÓN EN LOTE (5s)\n\n¿Estás seguro de que deseas desinstalar de forma limpia las siguientes ${selectedApps.length} aplicaciones seleccionadas?\n\n${appListStr}${moreCountStr}\n\n• Se ejecutarán los desinstaladores de cada programa de forma secuencial.\n• 🛡️ ESCUDO ACTIVO: Todos los lanzadores (Epic Games, Steam, EA, Ubisoft) y componentes compartidos están blindados.\n• Se limpiarán únicamente los residuos huérfanos específicos de cada aplicación.${hasSystem ? '\n\n🔴 ATENCIÓN: Has seleccionado componentes del sistema o controladores sensibles.' : ''}`;
 
   showConfirmationModal(warningMsg, async () => {
     isUpdating = true;
@@ -1553,11 +1878,11 @@ function handleUninstallSelected() {
 
         window.electronAPI.onUninstallLog((data) => {
           appendLog(data.type, data.text);
-          if (data.text.includes('Detectado juego de Steam')) {
-            setStatusBar(`Desinstalando (${i + 1}/${total}): ${currentApp.name}`, 'Confirma en la ventana de Steam si aparece...', Math.min(95, startPct + 30), 'busy');
-          } else if (data.text.includes('FASE 3') || data.text.includes('Buscando carpetas residuales')) {
+          if (data.text.includes('Detectado juego de Epic Games') || data.text.includes('Detectado juego de Steam')) {
+            setStatusBar(`Desinstalando (${i + 1}/${total}): ${currentApp.name}`, 'Confirma en la ventana del lanzador si aparece...', Math.min(95, startPct + 30), 'busy');
+          } else if (data.text.includes('FASE 3') || data.text.includes('Inspeccionando almacenamiento')) {
             if (btnForceClean) btnForceClean.classList.add('hidden');
-            setStatusBar(`Limpiando (${i + 1}/${total}): ${currentApp.name}`, 'Eliminando residuos en Registro y Disco...', Math.min(95, startPct + Math.round(50 / total)), 'busy');
+            setStatusBar(`Limpiando (${i + 1}/${total}): ${currentApp.name}`, 'Eliminando residuos de forma segura...', Math.min(95, startPct + Math.round(50 / total)), 'busy');
           }
         });
 
@@ -1682,14 +2007,27 @@ async function handleDetectGpu() {
   }
 }
 
-// ─── Vendor Brand Logos ──────────────────────────────────────────────────────
-const NVIDIA_LOGO_SVG = `<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M9.54 4.5c-3.56.44-6.38 3.28-6.82 6.84-.45 3.66 1.79 7.11 5.39 8.11 1.8.5 3.7.25 5.3-.7v2.52c-2.1 1.02-4.52 1.29-6.82.7-4.7-1.21-8.02-5.48-7.94-10.33.09-5.07 3.96-9.31 9.01-9.95 4.64-.59 9.12 1.7 11.28 5.77 1.24 2.33 1.65 4.97 1.2 7.57h-2.52c.36-2.07.02-4.19-.99-6.04-1.66-3.05-4.98-4.79-8.47-4.5zm2.83 4.76c-2.02.25-3.64 1.85-3.93 3.88-.28 2.08 1.03 4.01 3.06 4.55 1.01.27 2.08.12 2.99-.4v-4.58c-.74-.87-1.27-1.17-2.12-1.18zm4.74-1.72c-.69-.72-1.52-1.26-2.43-1.61v10.59c.91-.52 1.67-1.28 2.19-2.19 1.21-2.1 1.28-4.69.24-6.79z"/></svg>`;
+// ─── Vendor Brand Logos (Vectores Oficiales de las Compañías) ───────────────
+const NVIDIA_LOGO_SVG = `<svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-label="NVIDIA">
+  <path d="M8.948 8.798v-1.43a6.7 6.7 0 0 1 .424-.018c3.922-.124 6.493 3.374 6.493 3.374s-2.774 3.851-5.75 3.851c-.398 0-.787-.062-1.158-.185v-4.346c1.528.185 1.837.857 2.747 2.385l2.04-1.714s-1.492-1.952-4-1.952a6.016 6.016 0 0 0-.796.035m0-4.735v2.138l.424-.027c5.45-.185 9.01 4.47 9.01 4.47s-4.08 4.964-8.33 4.964c-.37 0-.733-.035-1.095-.097v1.325c.3.035.61.062.91.062 3.957 0 6.82-2.023 9.593-4.408.459.371 2.34 1.263 2.73 1.652-2.633 2.208-8.772 3.984-12.253 3.984-.335 0-.653-.018-.971-.053v1.864H24V4.063zm0 10.326v1.131c-3.657-.654-4.673-4.46-4.673-4.46s1.758-1.944 4.673-2.262v1.237H8.94c-1.528-.186-2.73 1.245-2.73 1.245s.68 2.412 2.739 3.11M2.456 10.9s2.164-3.197 6.5-3.533V6.201C4.153 6.59 0 10.653 0 10.653s2.35 6.802 8.948 7.42v-1.237c-4.84-.6-6.492-5.936-6.492-5.936z"/>
+</svg>`;
 
-const AMD_LOGO_SVG = `<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M0 0v24h24V0H0zm21.6 18.4h-5.6l-3.6-3.6 3.6-3.6h5.6v7.2zM2.4 2.4h7.2v5.6L6 11.6l3.6 3.6v6.4H2.4V2.4zm11.2 0h8v8h-8V2.4z"/></svg>`;
+const AMD_LOGO_SVG = `<svg width="32" height="32" viewBox="608 0 193 193" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-label="AMD">
+  <path d="M754.27 39.205L610.797 0H800v189.21l-51.972-51.975V51.981zm-.061 10.416L609.2 115.903v74.899h74.889l53.505-53.506h-74.886z"/>
+</svg>`;
 
-const INTEL_LOGO_SVG = `<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M12.4 2.2c-5.5 0-10 4.5-10 10s4.5 10 10 10c4.1 0 7.7-2.5 9.2-6.2h-2.3c-1.3 2.5-3.9 4.2-6.9 4.2-4.4 0-8-3.6-8-8s3.6-8 8-8c3 0 5.6 1.7 6.9 4.2h2.3C20.1 4.7 16.5 2.2 12.4 2.2zm-2.7 6.5h1.9v6.6H9.7V8.7zm3.8 0h1.9v1.4c.5-.9 1.4-1.5 2.5-1.5 1.9 0 3.1 1.3 3.1 3.4v3.3h-1.9v-3.1c0-1.2-.6-1.9-1.6-1.9-.9 0-1.6.6-1.9 1.5v3.5h-1.9V8.7z"/></svg>`;
+const INTEL_LOGO_SVG = `<svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-label="Intel">
+  <path d="M20.42 7.345v9.18h1.651v-9.18zM0 7.475v1.737h1.737V7.474zm9.78.352v6.053c0 .513.044.945.13 1.292.087.34.235.618.44.828.203.21.475.359.803.451.334.093.754.136 1.255.136h.216v-1.533c-.24 0-.445-.012-.593-.037a.672.672 0 0 1-.39-.173.693.693 0 0 1-.173-.377 4.002 4.002 0 0 1-.037-.606v-2.182h1.193v-1.416h-1.193V7.827zm-3.505 2.312c-.396 0-.76.08-1.082.241-.327.161-.6.384-.822.668l-.087.117v-.902H2.658v6.256h1.639v-3.214c.018-.588.16-1.02.433-1.299.29-.297.642-.445 1.044-.445.476 0 .841.149 1.082.433.235.284.359.686.359 1.2v3.324h1.663V12.97c.006-.89-.229-1.595-.686-2.09-.458-.495-1.1-.742-1.917-.742zm10.065.006a3.252 3.252 0 0 0-2.306.946c-.29.29-.525.637-.692 1.033a3.145 3.145 0 0 0-.254 1.273c0 .452.08.878.241 1.274.161.395.39.742.674 1.032.284.29.637.526 1.045.693.408.173.86.26 1.342.26 1.397 0 2.262-.637 2.782-1.23l-1.187-.904c-.248.297-.841.699-1.583.699-.464 0-.847-.105-1.138-.321a1.588 1.588 0 0 1-.593-.872l-.019-.056h4.915v-.587c0-.451-.08-.872-.235-1.267a3.393 3.393 0 0 0-.661-1.033 3.013 3.013 0 0 0-1.02-.692 3.345 3.345 0 0 0-1.311-.248zm-16.297.118v6.256h1.651v-6.256zm16.278 1.286c1.132 0 1.664.797 1.664 1.255l-3.32.006c0-.458.525-1.255 1.656-1.261z"/>
+</svg>`;
 
-const GENERIC_GPU_SVG = `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2.5"/><circle cx="7.5" cy="10.5" r="3.2"/><circle cx="7.5" cy="10.5" r="0.8" fill="currentColor"/><circle cx="16.5" cy="10.5" r="3.2"/><circle cx="16.5" cy="10.5" r="0.8" fill="currentColor"/><path d="M5 17v3M7.5 17v3M10 17v3M14 17v3M16.5 17v3M19 17v3"/></svg>`;
+const GENERIC_GPU_SVG = `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="2" y="4" width="20" height="13" rx="2.5"/>
+  <circle cx="7.5" cy="10.5" r="3.2"/>
+  <circle cx="7.5" cy="10.5" r="0.8" fill="currentColor"/>
+  <circle cx="16.5" cy="10.5" r="3.2"/>
+  <circle cx="16.5" cy="10.5" r="0.8" fill="currentColor"/>
+  <path d="M5 17v3M7.5 17v3M10 17v3M14 17v3M16.5 17v3M19 17v3"/>
+</svg>`;
 
 function renderGpuInfo(data) {
   const gpus = data.GPUs || [];
@@ -2131,7 +2469,11 @@ function renderSuiteCardsToGrid(grid, suites) {
 
   suites.forEach((suite) => {
     const card = document.createElement('div');
-    card.className = `gpu-card ${suite.recommended ? 'recommended' : ''} ${suite.isInstalled ? 'installed' : ''}`;
+    const isNvidiaSuite = (suite.id || '').includes('nvidia') || (suite.name || '').toLowerCase().includes('nvidia');
+    const isAmdSuite = (suite.id || '').includes('amd') || (suite.name || '').toLowerCase().includes('amd') || (suite.name || '').toLowerCase().includes('radeon');
+    const isIntelSuite = (suite.id || '').includes('intel') || (suite.name || '').toLowerCase().includes('intel');
+    const vendorClass = isNvidiaSuite ? 'suite-nvidia' : (isAmdSuite ? 'suite-amd' : (isIntelSuite ? 'suite-intel' : ''));
+    card.className = `gpu-card ${vendorClass} ${suite.recommended ? 'recommended' : ''} ${suite.isInstalled ? 'installed' : ''}`;
 
     const featuresHtml = (suite.features || []).map(f => `
       <li>

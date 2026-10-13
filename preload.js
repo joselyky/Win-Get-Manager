@@ -11,13 +11,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeWindow:    () => ipcRenderer.send('window:close'),
 
   // WinGet operations
-  listUpgrades:      ()           => ipcRenderer.invoke('winget:list-upgrades'),
-  upgradePackages:   (ids)        => ipcRenderer.send('winget:upgrade-packages', ids),
-  upgradeAll:        ()           => ipcRenderer.send('winget:upgrade-all'),
+  listUpgrades:             ()    => ipcRenderer.invoke('winget:list-upgrades'),
+  upgradePackages:          (ids) => ipcRenderer.send('winget:upgrade-packages', ids),
+  upgradeAll:               ()    => ipcRenderer.send('winget:upgrade-all'),
+  enableWinGetInTerminal:   ()    => ipcRenderer.invoke('winget:enable-in-terminal'),
 
   // WinGet live output listeners
-  onLog:  (cb) => ipcRenderer.on('winget:log',  (_e, data) => cb(data)),
-  onDone: (cb) => ipcRenderer.on('winget:done', (_e, data) => cb(data)),
+  onLog:         (cb) => ipcRenderer.on('winget:log',          (_e, data) => cb(data)),
+  onDone:        (cb) => ipcRenderer.on('winget:done',         (_e, data) => cb(data)),
+  onQueueInit:   (cb) => ipcRenderer.on('winget:queue-init',   (_e, data) => cb(data)),
+  onQueueUpdate: (cb) => ipcRenderer.on('winget:queue-update', (_e, data) => cb(data)),
 
   // Remove listeners (cleanup)
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
@@ -38,4 +41,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   launchGpuApp: (appIdOrPath) => ipcRenderer.invoke('gpu:launch-app', appIdOrPath),
   onGpuLog: (cb) => ipcRenderer.on('gpu:install-log', (_e, data) => cb(data)),
   onGpuDone: (cb) => ipcRenderer.on('gpu:install-done', (_e, data) => cb(data)),
+
+  // Error recovery APIs
+  killProcess: (nameOrId) => ipcRenderer.invoke('apps:kill-process', nameOrId),
+  upgradePackageElevated: (pkg) => ipcRenderer.send('winget:upgrade-package-elevated', pkg),
 });

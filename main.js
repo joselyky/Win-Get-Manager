@@ -3,6 +3,8 @@ const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 let mainWindow;
@@ -300,9 +302,44 @@ ipcMain.handle('winget:list-upgrades', async () => {
 
     proc.on('error', err => resolve({
       success: false,
-      error: `No se pudo ejecutar winget: ${err.message}\n\nInstala "App Installer" desde la Microsoft Store.`,
+      error: `No se pudo ejecutar winget: ${err.message}\n\nInstala "App Installer" desde la Microsoft Store o activa WinGet en la terminal.`,
       raw: '', stderr: '', code: -1,
     }));
+  });
+});
+
+// ─── IPCMAIN: ENABLE WINGET IN TERMINAL ───────────────────────────────────────
+ipcMain.handle('winget:enable-in-terminal', async () => {
+  return new Promise((resolve) => {
+    const scriptPath = path.join(__dirname, 'scripts', 'enable-winget.ps1');
+    const fallbackPath = path.join(process.resourcesPath || '', 'scripts', 'enable-winget.ps1');
+    const targetScript = fs.existsSync(scriptPath) ? scriptPath : fallbackPath;
+
+    if (!fs.existsSync(targetScript)) {
+      return resolve({
+        success: false,
+        error: `No se encontro el script de activacion en ${targetScript}`,
+      });
+    }
+
+    const proc = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', targetScript,
+    ], { windowsHide: true });
+
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+
+    proc.on('close', code => {
+      resolve({ success: code === 0, stdout, stderr, code });
+    });
+
+    proc.on('error', err => {
+      resolve({ success: false, error: err.message, code: -1 });
+    });
   });
 });
 
@@ -329,6 +366,123 @@ ipcMain.handle('winget:list-upgrades', async () => {
  *   While winget IDs don't normally contain spaces, quoting is defensive programming
  *   and prevents shell word-splitting on unusual IDs.
  */
+// Helper to query remote Content-Length via HTTP HEAD following redirects
+function getTotalSizeFromUrl(url, maxRedirects = 5) {
+  return new Promise(resolve => {
+    if (!url || maxRedirects <= 0) return resolve(0);
+    try {
+      const client = url.startsWith('https:') ? https : http;
+      const req = client.request(url, { method: 'HEAD', headers: { 'User-Agent': 'WinGet-Manager/1.0.1' } }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          try {
+            const nextUrl = new URL(res.headers.location, url).href;
+            return getTotalSizeFromUrl(nextUrl, maxRedirects - 1).then(resolve);
+          } catch (_) {
+            return resolve(0);
+          }
+        }
+        const len = parseInt(res.headers['content-length'] || '0', 10);
+        resolve(isNaN(len) ? 0 : len);
+      });
+      req.on('error', () => resolve(0));
+      req.setTimeout(4000, () => { req.destroy(); resolve(0); });
+      req.end();
+    } catch (_) {
+      resolve(0);
+    }
+  });
+}
+
+// Real-time tracker for active download files in Temp\WinGet
+function trackActiveDownload(pkgId, totalBytes, onProgress) {
+  const wingetDir = path.join(process.env.LOCALAPPDATA || '', 'Temp', 'WinGet');
+  let lastBytes = 0;
+  let lastTime = Date.now();
+  let maxBytesSeen = 0;
+  let stopped = false;
+
+  const interval = setInterval(() => {
+    if (stopped) return;
+    try {
+      if (!fs.existsSync(wingetDir)) return;
+      const subdirs = fs.readdirSync(wingetDir);
+      let currentBytes = 0;
+      let foundTmp = false;
+
+      // 1. Check folder matching pkgId
+      const targetSub = subdirs.find(s => s.toLowerCase().includes(pkgId.toLowerCase()));
+      if (targetSub) {
+        const fullSub = path.join(wingetDir, targetSub);
+        try {
+          if (fs.statSync(fullSub).isDirectory()) {
+            const files = fs.readdirSync(fullSub).filter(f => f.endsWith('.tmp'));
+            for (const f of files) {
+              const tmpPath = path.join(fullSub, f);
+              try {
+                const fd = fs.openSync(tmpPath, 'r');
+                const sz = fs.fstatSync(fd).size;
+                fs.closeSync(fd);
+                if (sz > currentBytes) currentBytes = sz;
+                foundTmp = true;
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 2. If not found in subfolder, inspect .tmp files modified recently in WinGet root
+      if (!foundTmp) {
+        const rootTmps = subdirs.filter(f => f.endsWith('.tmp'));
+        for (const f of rootTmps) {
+          const tmpPath = path.join(wingetDir, f);
+          try {
+            const stat = fs.statSync(tmpPath);
+            if (Date.now() - stat.mtimeMs < 20000) {
+              const fd = fs.openSync(tmpPath, 'r');
+              const sz = fs.fstatSync(fd).size;
+              fs.closeSync(fd);
+              if (sz > currentBytes) currentBytes = sz;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (currentBytes > maxBytesSeen) maxBytesSeen = currentBytes;
+
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      let speedMBs = '0.0';
+      if (dt >= 0.5) {
+        const speed = (maxBytesSeen - lastBytes) / dt;
+        speedMBs = Math.max(0, speed / (1024 * 1024)).toFixed(1);
+        lastBytes = maxBytesSeen;
+        lastTime = now;
+      }
+
+      const downloadedMB = (maxBytesSeen / (1024 * 1024)).toFixed(1);
+      const totalMB = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : '—';
+      const percent = totalBytes > 0 ? Math.min(99.5, Number(((maxBytesSeen / totalBytes) * 100).toFixed(1))) : 0;
+
+      onProgress({
+        downloadedBytes: maxBytesSeen,
+        totalBytes,
+        downloadedMB,
+        totalMB,
+        percent,
+        speedMBs
+      });
+    } catch (_) {}
+  }, 200);
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(interval);
+    },
+    getMaxBytes: () => maxBytesSeen
+  };
+}
+
 ipcMain.on('winget:upgrade-packages', (event, packages) => {
   if (!packages?.length) {
     event.sender.send('winget:log', { type: 'error', text: 'No se seleccionaron paquetes.' });
@@ -342,6 +496,24 @@ ipcMain.on('winget:upgrade-packages', (event, packages) => {
     text: `▶ Iniciando actualización de ${packages.length} paquete(s)...\n`,
   });
 
+  // Initialize UI Queue
+  const queueItems = packages.map((p, idx) => ({
+    id: p.id,
+    name: p.name || p.id,
+    version: p.version || '',
+    available: p.available || '',
+    source: p.source || 'winget',
+    iconBase64: p.iconBase64 || '',
+    status: 'pending',
+    downloadedMB: '0.0',
+    totalMB: '—',
+    percent: 0,
+    speedMBs: '0.0',
+    index: idx,
+    total: packages.length
+  }));
+  event.sender.send('winget:queue-init', { queue: queueItems });
+
   let index = 0;
   const upgradeNext = () => {
     if (index >= packages.length) {
@@ -350,8 +522,10 @@ ipcMain.on('winget:upgrade-packages', (event, packages) => {
       return;
     }
 
-    const pkg = packages[index++];
+    const currentIdx = index++;
+    const pkg = packages[currentIdx];
     const pkgId = pkg.id;
+    const pkgName = pkg.name || pkgId;
     const pkgSource = pkg.source || 'winget';
 
     event.sender.send('winget:log', {
@@ -359,9 +533,23 @@ ipcMain.on('winget:upgrade-packages', (event, packages) => {
       text: `\n📦 Actualizando: ${pkgId} (${pkgSource})\n${'─'.repeat(50)}\n`,
     });
 
+    // Notify queue that package is preparing / starting
+    event.sender.send('winget:queue-update', {
+      pkgId,
+      status: 'starting',
+      downloadedMB: '0.0',
+      totalMB: '—',
+      percent: 0,
+      speedMBs: '0.0',
+      message: 'Iniciando descarga...',
+      index: currentIdx,
+      total: packages.length
+    });
+
     const args = [
       'upgrade',
       '--id', pkgId,
+      '--exact',
       '--source', pkgSource,
       '--silent',
       '--force',
@@ -374,34 +562,354 @@ ipcMain.on('winget:upgrade-packages', (event, packages) => {
     });
 
     let procOutput = '';
+    let targetUrl = '';
+    let totalBytes = 0;
+    let tracker = null;
+    let installStarted = false;
+
     proc.stdout.on('data', d => {
       const text = d.toString('utf8');
       procOutput += text;
       event.sender.send('winget:log', { type: 'output', text });
+
+      // Detect download URL in output stream
+      const urlMatch = text.match(/https?:\/\/[^\s\r\n"']+/i);
+      if (urlMatch && !targetUrl) {
+        targetUrl = urlMatch[0];
+        getTotalSizeFromUrl(targetUrl).then(size => {
+          totalBytes = size;
+          if (!installStarted) {
+            if (tracker) tracker.stop();
+            tracker = trackActiveDownload(pkgId, totalBytes, prog => {
+              if (installStarted) return;
+              event.sender.send('winget:queue-update', {
+                pkgId,
+                status: 'downloading',
+                downloadedMB: prog.downloadedMB,
+                totalMB: prog.totalMB,
+                percent: prog.percent,
+                speedMBs: prog.speedMBs,
+                message: `Descargando: ${prog.downloadedMB} MB / ${prog.totalMB} MB (${prog.percent}%)`,
+                index: currentIdx,
+                total: packages.length
+              });
+            });
+          }
+        });
+      }
+
+      // Detect installer verification / installation start
+      const isInstalling = text.includes('hash del instalador se verificó') ||
+                           text.includes('Installer hash verified') ||
+                           text.includes('Iniciando la actualización') ||
+                           text.includes('Iniciando instalación') ||
+                           text.includes('Starting package install');
+      if (isInstalling && !installStarted) {
+        installStarted = true;
+        if (tracker) tracker.stop();
+        const finalMB = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : (tracker ? (tracker.getMaxBytes() / (1024*1024)).toFixed(1) : '—');
+        event.sender.send('winget:queue-update', {
+          pkgId,
+          status: 'installing',
+          downloadedMB: finalMB,
+          totalMB: finalMB,
+          percent: 100,
+          speedMBs: '0.0',
+          message: 'Instalando actualización...',
+          index: currentIdx,
+          total: packages.length
+        });
+      }
     });
+
     proc.stderr.on('data', d => { procOutput += d.toString('utf8'); });
 
     proc.on('close', code => {
-      const fileInUse = procOutput.includes('being used by another process') ||
-                        procOutput.includes('en uso por otro proceso');
-      const ok = code === 0;
+      if (tracker) tracker.stop();
+      const outputLower = procOutput.toLowerCase();
+      const unsignedCode = (typeof code === 'number') ? (code >>> 0) : 0;
+      const hexCode = '0x' + unsignedCode.toString(16).toLowerCase();
 
-      let msg = '';
-      if (ok)         msg = `✔ ${pkgId} actualizado correctamente.\n`;
-      else if (fileInUse) msg = `⚠ Cierra "${pkgId}" e intenta de nuevo.\n`;
-      else            msg = `⚠ ${pkgId} finalizó con código ${code}.\n`;
+      const fileInUse = unsignedCode === 2316632107 ||
+                        hexCode === '0x8a15002b' ||
+                        unsignedCode === 32 ||
+                        hexCode === '0x80070020' ||
+                        outputLower.includes('0x80070020') ||
+                        outputLower.includes('being used by another process') ||
+                        outputLower.includes('en uso por otro proceso') ||
+                        outputLower.includes('abierta');
 
-      event.sender.send('winget:log', { type: ok ? 'success' : 'warning', text: msg });
+      const needsAdmin = unsignedCode === 2147958056 ||
+                         hexCode === '0x80073d28' ||
+                         unsignedCode === 2147942405 ||
+                         hexCode === '0x80070005' ||
+                         unsignedCode === 5 ||
+                         outputLower.includes('0x80073d28') ||
+                         outputLower.includes('0x80070005') ||
+                         outputLower.includes('privilegios de administrador') ||
+                         outputLower.includes('administrator') ||
+                         outputLower.includes('run as administrator');
+
+      // Treat successful reboot codes and up-to-date codes as OK
+      const isRebootOrUpToDate = unsignedCode === 3010 ||
+                                 unsignedCode === 1641 ||
+                                 unsignedCode === 2316632084 ||
+                                 hexCode === '0x8a150014' ||
+                                 outputLower.includes('no applicable update') ||
+                                 outputLower.includes('ninguna actualización aplicable');
+      const ok = code === 0 || isRebootOrUpToDate;
+
+      const finalMB = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : (tracker ? (tracker.getMaxBytes() / (1024*1024)).toFixed(1) : '—');
+
+      if (ok) {
+        const msg = (unsignedCode === 3010 || unsignedCode === 1641)
+          ? `✔ ${pkgId} actualizado correctamente (Reinicio pendiente).\n`
+          : `✔ ${pkgId} actualizado correctamente.\n`;
+        event.sender.send('winget:queue-update', {
+          pkgId,
+          status: 'completed',
+          downloadedMB: finalMB,
+          totalMB: finalMB,
+          percent: 100,
+          speedMBs: '0.0',
+          message: (unsignedCode === 3010 || unsignedCode === 1641) ? 'Completado ✔ (Reinicio requerido)' : 'Completado con éxito',
+          index: currentIdx,
+          total: packages.length
+        });
+        event.sender.send('winget:log', { type: 'success', text: msg });
+        upgradeNext();
+        return;
+      }
+
+      // If installation failed because it needs Admin, automatically prompt with elevation!
+      if (needsAdmin) {
+        event.sender.send('winget:log', {
+          type: 'warning',
+          text: `⚠ ${pkgId} requiere permisos de Administrador para instalarse. Solicitando autorización del sistema (UAC)...\n`
+        });
+        event.sender.send('winget:queue-update', {
+          pkgId,
+          status: 'installing',
+          downloadedMB: finalMB,
+          totalMB: finalMB,
+          percent: 100,
+          speedMBs: '0.0',
+          message: 'Esperando autorización de Administrador (UAC)...',
+          index: currentIdx,
+          total: packages.length
+        });
+
+        runElevatedUpgrade(pkgId, pkgSource, (elevatedCode, elevatedOut) => {
+          const elUnsigned = (typeof elevatedCode === 'number') ? (elevatedCode >>> 0) : 0;
+          const elOk = elevatedCode === 0 || elUnsigned === 3010 || elUnsigned === 1641;
+          const userCancel = elevatedCode === 1223 || elUnsigned === 1223;
+          const status = elOk ? 'completed' : (userCancel ? 'admin-needed' : 'error');
+          const friendlyMsg = elOk
+            ? 'Completado con éxito (como Administrador)'
+            : (userCancel ? 'Permisos de Administrador cancelados por el usuario' : getFriendlyErrorMessage(elevatedCode, elevatedOut));
+
+          event.sender.send('winget:queue-update', {
+            pkgId,
+            status,
+            downloadedMB: finalMB,
+            totalMB: finalMB,
+            percent: elOk ? 100 : 0,
+            speedMBs: '0.0',
+            message: friendlyMsg,
+            errorType: userCancel ? 'admin' : 'general',
+            index: currentIdx,
+            total: packages.length
+          });
+
+          event.sender.send('winget:log', {
+            type: elOk ? 'success' : 'warning',
+            text: elOk ? `✔ ${pkgId} actualizado correctamente con permisos de Administrador.\n` : `✖ Falló con permisos de Administrador (${friendlyMsg}).\n`
+          });
+          upgradeNext();
+        });
+        return;
+      }
+
+      // Other errors or app in use
+      const friendlyMsg = getFriendlyErrorMessage(code, procOutput);
+      const status = fileInUse ? 'in-use' : (needsAdmin ? 'admin-needed' : 'error');
+
+      event.sender.send('winget:queue-update', {
+        pkgId,
+        status,
+        downloadedMB: finalMB,
+        totalMB: finalMB,
+        percent: 0,
+        speedMBs: '0.0',
+        message: friendlyMsg,
+        errorType: needsAdmin ? 'admin' : (fileInUse ? 'in-use' : 'general'),
+        index: currentIdx,
+        total: packages.length
+      });
+
+      event.sender.send('winget:log', {
+        type: 'warning',
+        text: `⚠ ${pkgId}: ${friendlyMsg} (código ${hexCode !== '0x0' ? hexCode : code}).\n`
+      });
+
       upgradeNext();
     });
 
     proc.on('error', err => {
+      if (tracker) tracker.stop();
+      event.sender.send('winget:queue-update', {
+        pkgId,
+        status: 'error',
+        downloadedMB: '0.0',
+        totalMB: '—',
+        percent: 0,
+        speedMBs: '0.0',
+        message: `Error al iniciar el proceso: ${err.message}`,
+        errorType: 'general',
+        index: currentIdx,
+        total: packages.length
+      });
       event.sender.send('winget:log', { type: 'error', text: `✖ Error: ${err.message}\n` });
       upgradeNext();
     });
   };
 
   upgradeNext();
+});
+
+// Helper for error message translation
+function getFriendlyErrorMessage(code, output = '') {
+  const unsignedCode = (typeof code === 'number') ? (code >>> 0) : 0;
+  const hexCode = '0x' + unsignedCode.toString(16).toLowerCase();
+  const lower = (output || '').toLowerCase();
+
+  if (code === 0) return 'Completado con éxito';
+  if (unsignedCode === 3010 || unsignedCode === 1641) return 'Completado ✔ (Reinicio requerido)';
+  if (unsignedCode === 2316632084 || hexCode === '0x8a150014' || lower.includes('no applicable update') || lower.includes('ninguna actualización aplicable')) {
+    return 'Ya se encuentra en la versión más reciente';
+  }
+  if (unsignedCode === 2147958056 || hexCode === '0x80073d28' || unsignedCode === 2147942405 || hexCode === '0x80070005' || unsignedCode === 5 ||
+      lower.includes('0x80073d28') || lower.includes('0x80070005') || lower.includes('privilegios de administrador') || lower.includes('administrator')) {
+    return 'Requiere permisos de Administrador para instalarse';
+  }
+  if (unsignedCode === 1223 || hexCode === '0x800704c7' || unsignedCode === 1602 || hexCode === '0x80070642' || lower.includes('cancelada por el usuario')) {
+    return 'Instalación cancelada por el usuario';
+  }
+  if (unsignedCode === 2316632107 || hexCode === '0x8a15002b' || unsignedCode === 32 || hexCode === '0x80070020' ||
+      lower.includes('0x80070020') || lower.includes('en uso') || lower.includes('in use') || lower.includes('another process')) {
+    return 'La aplicación está abierta en Windows. Ciérrala para continuar';
+  }
+  if (unsignedCode === 2316632081 || hexCode === '0x8a150011' || lower.includes('hash')) {
+    return 'Fallo de integridad: El hash del instalador no coincide con el repositorio oficial';
+  }
+  if (unsignedCode === 1618 || hexCode === '0x80070652') {
+    return 'Hay otra instalación de Windows en curso (espera unos segundos)';
+  }
+  if (unsignedCode === 1603 || hexCode === '0x80070643') {
+    return 'Error del instalador (1603): Puede requerir permisos de Administrador o cerrar la app';
+  }
+  if (unsignedCode === 2316632066 || hexCode === '0x8a150002') {
+    return 'Paquete no encontrado en el origen';
+  }
+  if (lower.includes('download') && (lower.includes('failed') || lower.includes('falló') || lower.includes('error'))) {
+    return 'Error de conexión al descargar el instalador';
+  }
+  if (hexCode !== '0x0') {
+    return `Error en la instalación (${hexCode})`;
+  }
+  return `Error en la instalación (${code})`;
+}
+
+// Executes an upgrade with administrator elevation via PowerShell UAC
+function runElevatedUpgrade(pkgId, pkgSource, callback) {
+  const sourceArg = pkgSource ? `'--source', '${pkgSource}',` : '';
+  const psScript = `
+try {
+  $p = Start-Process winget -ArgumentList @('upgrade', '--id', '${pkgId}', '--exact', ${sourceArg} '--silent', '--force', '--accept-package-agreements', '--accept-source-agreements') -Verb RunAs -PassThru -Wait -WindowStyle Hidden
+  if ($p) {
+    exit $p.ExitCode
+  } else {
+    exit 1
+  }
+} catch {
+  if ($_.Exception.NativeErrorCode -eq 1223) {
+    exit 1223
+  }
+  Write-Output $_.Exception.Message
+  exit 1
+}
+`;
+  const proc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+    windowsHide: true
+  });
+  let out = '';
+  proc.stdout.on('data', d => { out += d.toString('utf8'); });
+  proc.stderr.on('data', d => { out += d.toString('utf8'); });
+  proc.on('close', code => {
+    callback(code, out);
+  });
+  proc.on('error', err => {
+    callback(-1, err.message);
+  });
+}
+
+// IPC: Kill process for package
+ipcMain.handle('apps:kill-process', async (_e, nameOrId) => {
+  return new Promise(resolve => {
+    const term = (nameOrId || '').split('.').pop() || nameOrId;
+    const psScript = `
+Get-Process -Name "*${term}*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+`;
+    const proc = spawn('powershell.exe', ['-NoProfile', '-Command', psScript], { windowsHide: true });
+    proc.on('close', () => resolve({ success: true }));
+  });
+});
+
+// IPC: Manually trigger elevated upgrade for a single package
+ipcMain.on('winget:upgrade-package-elevated', (event, pkg) => {
+  const pkgId = pkg.id;
+  const pkgSource = pkg.source || 'winget';
+
+  event.sender.send('winget:log', {
+    type: 'info',
+    text: `\n🛡 Reintentando con permisos de Administrador: ${pkgId}...\n`
+  });
+
+  event.sender.send('winget:queue-update', {
+    pkgId,
+    status: 'installing',
+    downloadedMB: '—',
+    totalMB: '—',
+    percent: 100,
+    speedMBs: '0.0',
+    message: 'Esperando autorización de Administrador (UAC)...'
+  });
+
+  runElevatedUpgrade(pkgId, pkgSource, (code, out) => {
+    const unsignedCode = (typeof code === 'number') ? (code >>> 0) : 0;
+    const ok = code === 0 || unsignedCode === 3010 || unsignedCode === 1641;
+    const userCancel = code === 1223 || unsignedCode === 1223;
+    const status = ok ? 'completed' : (userCancel ? 'admin-needed' : 'error');
+    const friendlyMsg = ok
+      ? 'Completado con éxito (como Administrador)'
+      : (userCancel ? 'Permisos de Administrador cancelados por el usuario' : getFriendlyErrorMessage(code, out));
+
+    event.sender.send('winget:queue-update', {
+      pkgId,
+      status,
+      downloadedMB: '—',
+      totalMB: '—',
+      percent: ok ? 100 : 0,
+      speedMBs: '0.0',
+      message: friendlyMsg,
+      errorType: userCancel ? 'admin' : 'general'
+    });
+
+    event.sender.send('winget:log', {
+      type: ok ? 'success' : 'warning',
+      text: ok ? `✔ ${pkgId} actualizado con permisos de Administrador.\n` : `✖ Falló (${friendlyMsg}).\n`
+    });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -685,32 +1193,70 @@ ipcMain.on('apps:uninstall-clean', (event, appInfo) => {
     return;
   }
 
-  // ─── FASE 1: Identificación y Extracción de Tokens Heurísticos ───────────────
+  // ─── FASE 1: Identificación y Extracción Segura de Tokens y Plataforma ───────────────
   const stopwords = new Set([
     'setup', 'install', 'installer', 'uninstaller', 'update', 'updater',
     'windows', 'microsoft', 'corporation', 'inc', 'ltd', 'gmbh', 'llc',
-    'software', 'app', 'application', 'tool', 'tools', 'utility',
-    'x64', 'x86', 'win64', 'win32', 'v1', 'v2', 'edition', 'version'
+    'software', 'app', 'application', 'tool', 'tools', 'utility', 'utilities',
+    'x64', 'x86', 'win64', 'win32', 'v1', 'v2', 'v3', 'edition', 'version',
+    'free', 'pro', 'desktop', 'client', 'service', 'services', 'manager', 'management',
+    'games', 'game', 'gaming', 'player', 'play', 'studio', 'studios', 'system', 'systems',
+    'center', 'centre', 'hub', 'suite', 'online', 'live', 'code', 'open', 'web', 'net',
+    'file', 'files', 'data', 'base', 'core', 'pack', 'package', 'portable', 'classic',
+    'launcher', 'store', 'portal', 'community', 'standard', 'ultimate', 'deluxe'
   ]);
 
+  // Lista de plataformas y directorios estrictamente protegidos (ESCUDO DE PROTECCIÓN)
+  const protectedEcosystems = [
+    'epic games', 'epicgames', 'epicgameslauncher', 'epic', 'epic online services',
+    'steam', 'valve', 'steamapps', 'common',
+    'ubisoft', 'ubisoft game launcher', 'ubisoftconnect', 'upc',
+    'electronic arts', 'ea desktop', 'origin', 'ea games', 'origin games',
+    'riot games', 'riot client',
+    'battle.net', 'blizzard', 'blizzard entertainment',
+    'gog galaxy', 'gog.com',
+    'microsoft', 'windows', 'windows nt', 'windowsapps', 'package cache', 'common files',
+    'system32', 'syswow64', 'program files', 'program files (x86)', 'programdata',
+    'adobe', 'google', 'mozilla', 'apple', 'nvidia', 'nvidia corporation', 'amd', 'intel',
+    'saved games', 'my games'
+  ];
+
+  const uninstLower = (uninstallString || '').toLowerCase();
+  const idLower = (id || '').toLowerCase();
+  const locLower = (installLocation || '').toLowerCase();
+
+  // Detección de tienda / lanzador de juegos
+  const isSteam = uninstLower.includes('steam://') || uninstLower.includes('steam.exe') || idLower.startsWith('steam app ');
+  const isEpic = uninstLower.includes('com.epicgames.launcher') || locLower.includes('\\epic games\\') || locLower.includes('/epic games/') || idLower.startsWith('epicgames.');
+  const isUbisoft = locLower.includes('ubisoft game launcher') || uninstLower.includes('uplay');
+  const isEA = locLower.includes('ea desktop') || locLower.includes('origin games') || locLower.includes('ea games') || locLower.includes('electronic arts');
+  const isRiot = locLower.includes('riot games') || uninstLower.includes('riotclient');
+  const isBattleNet = locLower.includes('battle.net') || uninstLower.includes('battlenet://');
+  const isGOG = locLower.includes('gog galaxy') || uninstLower.includes('gog galaxy');
+
+  const isLauncherManaged = isSteam || isEpic || isUbisoft || isEA || isRiot || isBattleNet || isGOG;
+
+  // Extracción de tokens limpia: SÓLO a partir del nombre del programa, NUNCA del editor/publisher
   const rawTokens = [];
-  const cleanName = (name || '').replace(/\(.*\)/g, '').replace(/\[.*\]/g, '').trim();
+  const cleanName = (name || '')
+    .replace(/\(.*?\)/g, '')
+    .replace(/\[.*?\]/g, '')
+    .replace(/\bv?\d+(\.\d+)*\b/g, '')
+    .trim();
+
   cleanName.split(/[\s\-_\.]+/).forEach(w => {
     const low = w.toLowerCase().trim();
     if (low.length >= 3 && !stopwords.has(low)) rawTokens.push(low);
   });
 
-  if (publisher && publisher !== 'Desconocido' && !publisher.toLowerCase().includes('valve')) {
-    publisher.split(/[\s\-_\.]+/).forEach(w => {
-      const low = w.toLowerCase().trim();
-      if (low.length >= 3 && !stopwords.has(low)) rawTokens.push(low);
-    });
-  }
-
+  // Si installLocation apunta a una carpeta específica del juego (no la raíz del lanzador)
+  let safeInstallLoc = '';
   if (installLocation) {
     const baseFolder = path.basename(installLocation).toLowerCase().trim();
-    if (baseFolder.length >= 3 && !stopwords.has(baseFolder)) {
+    const isProtectedFolder = protectedEcosystems.includes(baseFolder);
+    if (!isProtectedFolder && baseFolder.length >= 3 && !stopwords.has(baseFolder)) {
       rawTokens.push(baseFolder);
+      safeInstallLoc = installLocation;
     }
   }
 
@@ -719,17 +1265,21 @@ ipcMain.on('apps:uninstall-clean', (event, appInfo) => {
   event.sender.send('apps:uninstall-log', {
     type: 'info',
     text: `\n┌─────────────────────────────────────────────────────────────┐\n` +
-          `│ 🛡️ CLEAN UNINSTALLER ENGINE (Geek Uninstaller Architecture)  │\n` +
+          `│ 🛡️ MOTOR DE DESINSTALACIÓN SEGURA Y RESIDUAL (SHIELD ENGINE) │\n` +
           `└─────────────────────────────────────────────────────────────┘\n` +
           `📦 Aplicación: ${name}\n` +
           `🏢 Editor: ${publisher || 'Desconocido'}\n` +
-          `[FASE 1] Tokens de búsqueda heurística: [${tokens.join(', ')}]\n\n`
+          `${isLauncherManaged ? `🎮 Plataforma de Juegos: ${isEpic ? 'Epic Games' : isSteam ? 'Steam' : isUbisoft ? 'Ubisoft Connect' : isEA ? 'EA App / Origin' : isRiot ? 'Riot Games' : isBattleNet ? 'Battle.net' : 'GOG Galaxy'} (Protección de cliente activa)\n` : ''}` +
+          `🔍 Tokens de comprobación residual: [${tokens.join(', ')}]\n\n`
   });
 
   function fixUninstallString(str) {
     if (!str) return '';
     let s = str.trim();
     s = s.replace(/^(msiexec(?:\.exe)?\s+)\/i/i, '$1/x');
+    if (s.toLowerCase().startsWith('msiexec') && !s.includes('/qn') && !s.includes('/passive') && !s.includes('/qr')) {
+      s += ' /passive /norestart';
+    }
     if (s.startsWith('"')) return s;
     const match = s.match(/^(.*\.exe)(\s+.*)?$/i);
     if (match) {
@@ -739,71 +1289,94 @@ ipcMain.on('apps:uninstall-clean', (event, appInfo) => {
   }
 
   const fixedUninstallString = fixUninstallString(uninstallString);
-  const isSteam = uninstallString.toLowerCase().includes('steam://') || uninstallString.toLowerCase().includes('steam.exe');
-  const isEpic = uninstallString.toLowerCase().includes('com.epicgames.launcher');
-
   let isFinished = false;
 
-  // ─── FASE 3 & 4: Escaneo Heurístico Profundo y Purga Forzada ─────────────────
+  // ─── FASE 3 & 4: Escaneo Heurístico Protegido y Purga Segura ─────────────────
   const runDeepHeuristicPurge = () => {
     if (isFinished) return;
     isFinished = true;
 
     event.sender.send('apps:uninstall-log', {
       type: 'info',
-      text: `\n[FASE 3] Iniciando escaneo heurístico profundo en Registro y Disco...\n`
+      text: `\n[FASE 3] Iniciando escaneo residual seguro en Registro y Almacenamiento...\n`
     });
 
-    // Generate dedicated PowerShell Win32 API Worker Script
+    // PowerShell script con Escudo de Protección Absoluto y ejecución ultrarrápida
     const psScript = `
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Compilar enlace nativo P/Invoke con kernel32 MoveFileEx
-$pinvoke = @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32IO {
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
-    public const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
-}
-"@
-Add-Type -TypeDefinition $pinvoke -ErrorAction SilentlyContinue
-
-$name = ${JSON.stringify(name)}
-$installLoc = ${JSON.stringify(installLocation || '')}
+$appName = ${JSON.stringify(name)}
+$cleanName = ${JSON.stringify(cleanName)}
+$appId = ${JSON.stringify(id || '')}
+$safeInstallLoc = ${JSON.stringify(safeInstallLoc || '')}
 $tokens = @(${tokens.map(t => JSON.stringify(t)).join(', ')})
+$isLauncherManaged = ${isLauncherManaged ? '$true' : '$false'}
 
 $deletedDirs = 0
-$deletedFiles = 0
-$rebootFiles = 0
 $purgedKeys = 0
+$rebootFiles = 0
 $stoppedServices = 0
 $killedProcs = 0
 
-# ─── FASE 4A: Cierre de Procesos Bloqueadores (Lockers) ────────────────────────
-if (![string]::IsNullOrWhiteSpace($installLoc) -and (Test-Path -LiteralPath $installLoc)) {
-    $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        try {
-            $_.Path -and ($_.Path.StartsWith($installLoc, [System.StringComparison]::OrdinalIgnoreCase) -or ($_.Path -match [regex]::Escape($installLoc)))
-        } catch { $false }
-    }
-    foreach ($p in $procs) {
-        Write-Output "LOG:warning|  [FASE 4] Proceso bloqueador detectado: $($p.ProcessName) (PID: $($p.Id)). Forzando cierre..."
-        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-        $killedProcs++
+# ─── ESCUDO DE PROTECCIÓN: NUNCA TOCAR ESTOS ELEMENTOS ────────────────────────
+$protectedNames = @(
+    "epic games", "epic", "epicgames", "epicgameslauncher", "epic online services",
+    "steam", "valve", "steamapps", "common",
+    "ubisoft", "ubisoft game launcher", "ubisoftconnect", "upc",
+    "electronic arts", "ea desktop", "origin", "ea games", "origin games",
+    "riot games", "riot client",
+    "battle.net", "blizzard", "blizzard entertainment",
+    "gog galaxy", "gog.com",
+    "microsoft", "windows", "windows nt", "windowsapps", "package cache", "common files",
+    "system32", "syswow64", "system", "policies", "classes",
+    "adobe", "google", "mozilla", "apple", "nvidia", "nvidia corporation", "amd", "intel",
+    "saved games", "my games", "documents", "downloads", "desktop"
+)
+
+$protectedProcs = @(
+    'epicgameslauncher', 'epiconlineservices', 'steam', 'steamwebhelper', 'steamservice',
+    'ubisoftconnect', 'upc', 'ubisoftgamelauncher', 'eadesktop', 'origin', 'riotclientservices',
+    'battle.net', 'agent', 'explorer', 'svchost', 'powershell', 'cmd', 'electron', 'winget manager', 'taskmgr'
+)
+
+# ─── FASE 4A: Cierre Seguro de Procesos Bloqueadores ──────────────────────────
+if (![string]::IsNullOrWhiteSpace($safeInstallLoc) -and (Test-Path -LiteralPath $safeInstallLoc)) {
+    $locBase = [System.IO.Path]::GetFileName($safeInstallLoc).ToLower()
+    if ($protectedNames -notcontains $locBase) {
+        $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            try {
+                if ($_.Path -and ($_.Path.StartsWith($safeInstallLoc, [System.StringComparison]::OrdinalIgnoreCase))) {
+                    $pName = $_.ProcessName.ToLower()
+                    if ($protectedProcs -notcontains $pName) { return $true }
+                }
+            } catch {}
+            $false
+        }
+        foreach ($p in $procs) {
+            Write-Output "LOG:warning|  [FASE 4] Proceso bloqueador detectado: $($p.ProcessName) (PID: $($p.Id)). Finalizando..."
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            $killedProcs++
+        }
     }
 }
 
-# ─── FASE 4B: Detención y Eliminación de Servicios Asociados ───────────────────
-if (![string]::IsNullOrWhiteSpace($installLoc)) {
+# ─── FASE 4B: Detención Segura de Servicios Propios ───────────────────────────
+if (![string]::IsNullOrWhiteSpace($safeInstallLoc)) {
     try {
         $services = Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue | Where-Object {
-            $_.PathName -and $_.PathName.IndexOf($installLoc, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            try {
+                if ($_.PathName -and $_.PathName.IndexOf($safeInstallLoc, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $sName = $_.Name.ToLower()
+                    $isProt = $false
+                    foreach ($pn in $protectedNames) { if ($sName.IndexOf($pn) -ge 0) { $isProt = $true; break } }
+                    return !$isProt
+                }
+            } catch {}
+            $false
         }
         foreach ($svc in $services) {
-            Write-Output "LOG:warning|  [FASE 4] Servicio activo detectado: $($svc.Name). Deteniendo y eliminando..."
+            Write-Output "LOG:warning|  [FASE 4] Servicio propio detectado: $($svc.Name). Deteniendo y eliminando..."
             Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
             & sc.exe delete $($svc.Name) | Out-Null
             $stoppedServices++
@@ -811,34 +1384,51 @@ if (![string]::IsNullOrWhiteSpace($installLoc)) {
     } catch {}
 }
 
-# ─── FASE 3A & 4C: Escaneo y Purga Heurística del Registro ──────────────────────
-Write-Output "LOG:info|[FASE 3] Inspeccionando claves de registro en HKLM y HKCU..."
+# ─── FASE 3A & 4C: Escaneo y Purga de Claves de Registro ───────────────────────
+Write-Output "LOG:info|[FASE 3] Inspeccionando registro de forma segura..."
+
 $regRoots = @(
     "HKLM:\\SOFTWARE",
     "HKCU:\\Software",
     "HKLM:\\SOFTWARE\\WOW6432Node",
     "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths"
 )
-$regBlacklist = @(
-    "Microsoft", "Windows", "Classes", "System", "Policies", "RegisteredApplications",
-    "Clients", "Program Groups", "Secure", "Windows NT", "Windows Defender"
-)
+
+$normApp = ($cleanName -replace '[^a-zA-Z0-9]', '').ToLower()
 
 foreach ($regRoot in $regRoots) {
     if (Test-Path -LiteralPath $regRoot) {
         $subKeys = Get-ChildItem -LiteralPath $regRoot -ErrorAction SilentlyContinue
         foreach ($sk in $subKeys) {
             $kName = $sk.PSChildName
-            if ($regBlacklist -contains $kName) { continue }
-            
-            $matched = $false
-            foreach ($t in $tokens) {
-                if ($kName.ToLower().IndexOf($t) -ge 0) {
-                    $matched = $true
-                    break
+            $kLow = $kName.ToLower()
+
+            # NUNCA eliminar una clave de editor o plataforma compartida
+            if ($protectedNames -contains $kLow) {
+                # Si es una clave de plataforma (ej. Epic Games o Valve), inspeccionar hijos para el juego específico
+                $childKeys = Get-ChildItem -LiteralPath $sk.PSPath -ErrorAction SilentlyContinue
+                foreach ($ck in $childKeys) {
+                    $ckName = $ck.PSChildName
+                    $ckNorm = ($ckName -replace '[^a-zA-Z0-9]', '').ToLower()
+                    if ($ckNorm -eq $normApp -or ($normApp.Length -ge 4 -and $ckNorm.StartsWith($normApp))) {
+                        Write-Output "LOG:output|  [FASE 4] Purgando clave residual del juego en $($sk.Name): $ckName"
+                        Remove-Item -LiteralPath $ck.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+                        $purgedKeys++
+                    }
                 }
+                continue
             }
-            if ($matched) {
+
+            # Para claves no protegidas, comprobar coincidencia exacta o normalizada con el nombre de la app
+            $kNorm = ($kName -replace '[^a-zA-Z0-9]', '').ToLower()
+            $isMatch = $false
+            if ($kNorm -eq $normApp) {
+                $isMatch = $true
+            } elseif ($normApp.Length -ge 5 -and $kNorm.StartsWith($normApp)) {
+                $isMatch = $true
+            }
+
+            if ($isMatch) {
                 Write-Output "LOG:output|  [FASE 4] Purgando clave de registro residual: $($sk.Name)"
                 Remove-Item -LiteralPath $sk.PSPath -Recurse -Force -ErrorAction SilentlyContinue
                 $purgedKeys++
@@ -847,71 +1437,104 @@ foreach ($regRoot in $regRoots) {
     }
 }
 
-# ─── FASE 3B & 4D: Escaneo y Purga de Disco con MoveFileExW ────────────────────
-Write-Output "LOG:info|[FASE 3] Inspeccionando almacenamiento y directorios del sistema..."
+# Limpiar entrada de Desinstalación (Uninstall) para eliminar registros fantasma
+if (![string]::IsNullOrWhiteSpace($appId)) {
+    $uninstallRegPaths = @(
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$appId",
+        "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$appId",
+        "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$appId"
+    )
+    foreach ($urp in $uninstallRegPaths) {
+        if (Test-Path -LiteralPath $urp) {
+            Write-Output "LOG:output|  [FASE 4] Limpiando registro de desinstalación de Windows..."
+            Remove-Item -LiteralPath $urp -Recurse -Force -ErrorAction SilentlyContinue
+            $purgedKeys++
+        }
+    }
+}
+
+# ─── FASE 3B & 4D: Escaneo y Purga de Disco con Protección Total ───────────────
+Write-Output "LOG:info|[FASE 3] Inspeccionando almacenamiento y carpetas residuales..."
+
 $scanBases = @(
-    [System.Environment]::GetFolderPath('ProgramFiles'),
-    [System.Environment]::GetFolderPath('ProgramFilesX86'),
     [System.Environment]::GetFolderPath('CommonApplicationData'),
     [System.Environment]::GetFolderPath('LocalApplicationData'),
     [System.Environment]::GetFolderPath('ApplicationData'),
     (Join-Path $env:USERPROFILE "AppData\\LocalLow"),
-    (Join-Path $env:USERPROFILE "Saved Games"),
-    (Join-Path $env:USERPROFILE "Documents\\My Games"),
     (Join-Path $env:APPDATA "Microsoft\\Windows\\Start Menu\\Programs"),
     (Join-Path ([System.Environment]::GetFolderPath('CommonApplicationData')) "Microsoft\\Windows\\Start Menu\\Programs"),
     [System.IO.Path]::GetTempPath()
 ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
 
-$dirBlacklist = @(
-    "C:\\", "C:\\Windows", "C:\\Windows\\System32", "C:\\Windows\\SysWOW64",
-    [System.Environment]::GetFolderPath('ProgramFiles'),
-    [System.Environment]::GetFolderPath('ProgramFilesX86'),
-    [System.Environment]::GetFolderPath('CommonApplicationData'),
-    $env:USERPROFILE,
-    [System.Environment]::GetFolderPath('LocalApplicationData'),
-    [System.Environment]::GetFolderPath('ApplicationData')
-) | ForEach-Object { $_.TrimEnd("\\") }
+# Program Files sólo si no está gestionado por un launcher como Epic o Steam
+if (!$isLauncherManaged) {
+    $scanBases += @(
+        [System.Environment]::GetFolderPath('ProgramFiles'),
+        [System.Environment]::GetFolderPath('ProgramFilesX86')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+}
 
 $dirsToPurge = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
-if (![string]::IsNullOrWhiteSpace($installLoc) -and (Test-Path -LiteralPath $installLoc)) {
-    $norm = $installLoc.TrimEnd("\\")
-    if ($dirBlacklist -notcontains $norm) {
-        $null = $dirsToPurge.Add($installLoc)
+# Si hay una carpeta de instalación confirmada propia del programa (no raíz del lanzador)
+if (![string]::IsNullOrWhiteSpace($safeInstallLoc) -and (Test-Path -LiteralPath $safeInstallLoc)) {
+    $bName = [System.IO.Path]::GetFileName($safeInstallLoc).ToLower()
+    if ($protectedNames -notcontains $bName) {
+        $null = $dirsToPurge.Add($safeInstallLoc)
     }
 }
 
 foreach ($base in $scanBases) {
-    $entries = Get-ChildItem -LiteralPath $base -ErrorAction SilentlyContinue
+    $entries = Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue
     foreach ($entry in $entries) {
-        $eName = $entry.Name.ToLower()
+        $eName = $entry.Name.Trim()
+        $eLow = $eName.ToLower()
+
+        # ESCUDO: Si es una carpeta de launcher o compartida, omitir
+        if ($protectedNames -contains $eLow) { continue }
+
+        $eNorm = ($eName -replace '[^a-zA-Z0-9]', '').ToLower()
         $matched = $false
-        foreach ($t in $tokens) {
-            if ($eName.IndexOf($t) -ge 0) {
-                $matched = $true
-                break
+
+        # Coincidencia estricta: nombre exacto normalizado o prefijo con separador
+        if ($eNorm -eq $normApp) {
+            $matched = $true
+        } elseif ($cleanName.Length -ge 4 -and $eName -match "^(?i)$([regex]::Escape($cleanName))([\s\-_\.]|$)") {
+            $matched = $true
+        } elseif ($tokens.Count -ge 2) {
+            # Si hay múltiples tokens específicos, deben estar presentes todos
+            $allPresent = $true
+            foreach ($t in $tokens) {
+                if ($eLow.IndexOf($t) -lt 0) { $allPresent = $false; break }
             }
+            if ($allPresent) { $matched = $true }
         }
+
         if ($matched) {
-            $eNorm = $entry.FullName.TrimEnd("\\")
-            if ($dirBlacklist -notcontains $eNorm) {
-                $null = $dirsToPurge.Add($entry.FullName)
-            }
+            $null = $dirsToPurge.Add($entry.FullName)
         }
     }
 }
 
 foreach ($target in $dirsToPurge) {
-    Write-Output "LOG:output|  [FASE 4] Eliminando residuo en disco: $target"
+    # Doble verificación antes de borrar
+    $tBase = [System.IO.Path]::GetFileName($target).ToLower()
+    if ($protectedNames -contains $tBase) {
+        Write-Output "LOG:warning|  [ESCUDO] Protección activada: Omitiendo carpeta del sistema o lanzador: $target"
+        continue
+    }
+
+    Write-Output "LOG:output|  [FASE 4] Eliminando residuo seguro en disco: $target"
     try {
-        Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+        [System.IO.Directory]::Delete($target, $true)
         $deletedDirs++
     } catch {
-        # Archivo bloqueado: usar Win32 API MoveFileEx con MOVEFILE_DELAY_UNTIL_REBOOT
-        Write-Output "LOG:warning|  [FASE 4] [BLOQUEADO] Archivo en uso bloqueado por el sistema. Programado para eliminarse al reiniciar: $target"
-        [Win32IO]::MoveFileEx($target, $null, [Win32IO]::MOVEFILE_DELAY_UNTIL_REBOOT) | Out-Null
-        $rebootFiles++
+        try {
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+            $deletedDirs++
+        } catch {
+            Write-Output "LOG:warning|  [FASE 4] No se pudo eliminar de inmediato (en uso): $target"
+        }
     }
 }
 
@@ -965,12 +1588,12 @@ Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppe
       const s = summaryData || { deletedDirs: 0, purgedKeys: 0, rebootFiles: 0, killedProcs: 0, stoppedServices: 0 };
       event.sender.send('apps:uninstall-log', {
         type: 'success',
-        text: `\n✅ LIMPIEZA PROFUNDA COMPLETADA:\n` +
-              `  • Directorios/archivos eliminados: ${s.deletedDirs}\n` +
-              `  • Claves de registro purgadas: ${s.purgedKeys}\n` +
-              `  • Archivos bloqueados diferidos a reinicio (MoveFileExW): ${s.rebootFiles}\n` +
-              `  • Procesos bloqueadores cerrados: ${s.killedProcs}\n` +
-              `  • Servicios detenidos y eliminados: ${s.stoppedServices}\n`
+        text: `\n✅ LIMPIEZA SEGURA COMPLETADA:\n` +
+              `  • Directorios y carpetas eliminados: ${s.deletedDirs}\n` +
+              `  • Claves y registros purgados: ${s.purgedKeys}\n` +
+              `  • Procesos propios cerrados: ${s.killedProcs}\n` +
+              `  • Servicios propios eliminados: ${s.stoppedServices}\n` +
+              `  • Protección de plataformas (Epic Games / Steam / Otros): ACTIVA Y RESPETADA 🛡️\n`
       });
 
       event.sender.send('apps:uninstall-done', { success: true, summary: s });
@@ -986,41 +1609,81 @@ Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppe
     });
   };
 
-  // ─── FASE 2: Ejecución del Desinstalador Estándar ────────────────────────────
+  // ─── FASE 2: Ejecución Inteligente del Desinstalador Oficial ────────────────
   let purgeStarted = false;
   const triggerPurge = (reason, code) => {
     if (purgeStarted) return;
     purgeStarted = true;
     ipcMain.removeAllListeners('apps:force-proceed-cleanup');
     if (code !== undefined && code !== null) {
-      event.sender.send('apps:uninstall-log', { type: 'info', text: `\n[FASE 2] Desinstalador oficial finalizado (código: ${code}). Iniciando limpieza profunda...\n` });
+      event.sender.send('apps:uninstall-log', { type: 'info', text: `\n[FASE 2] Desinstalador oficial finalizado (código: ${code}). Iniciando limpieza segura...\n` });
     }
     runDeepHeuristicPurge();
   };
 
   ipcMain.removeAllListeners('apps:force-proceed-cleanup');
   ipcMain.once('apps:force-proceed-cleanup', () => {
-    event.sender.send('apps:uninstall-log', { type: 'info', text: `\n[AVISO] Confirmación recibida: procediendo con el escaneo y purga profunda...\n` });
+    event.sender.send('apps:uninstall-log', { type: 'info', text: `\n[AVISO] Confirmación recibida: procediendo con el escaneo y purga segura...\n` });
     triggerPurge('manual');
   });
 
+  // CASO A: EPIC GAMES
+  if (isEpic) {
+    event.sender.send('apps:uninstall-log', {
+      type: 'info',
+      text: `[FASE 2] Detectado juego de Epic Games.\n` +
+            `▶ Abriendo desinstalador oficial en Epic Games Launcher...\n` +
+            `ℹ Confirma la desinstalación en la ventana de Epic Games si aparece.\n` +
+            `🛡️ El cliente y resto de juegos de Epic Games permanecerán intactos.\n`
+    });
+
+    const epicMatch = uninstallString.match(/com\.epicgames\.launcher:\/\/apps\/[^\s"']+/i);
+    const epicUrl = epicMatch ? epicMatch[0] : null;
+    const cmd = epicUrl ? `Start-Process '${epicUrl}'` : fixedUninstallString;
+
+    spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true });
+
+    // Para juegos de launcher, el cliente de Epic gestiona la desinstalación
+    setTimeout(() => {
+      if (!purgeStarted) {
+        event.sender.send('apps:uninstall-log', {
+          type: 'info',
+          text: `\nℹ Cuando la desinstalación en Epic Games termine, pulsa en la barra inferior 'El desinstalador ya terminó' para limpiar residuos de este juego.\n`
+        });
+      }
+    }, 4000);
+    return;
+  }
+
+  // CASO B: STEAM
   if (isSteam) {
-    event.sender.send('apps:uninstall-log', { type: 'info', text: `[FASE 2] Detectado juego de Steam. Abriendo protocolo oficial de desinstalación de Steam...\n` });
+    event.sender.send('apps:uninstall-log', {
+      type: 'info',
+      text: `[FASE 2] Detectado juego de Steam.\n` +
+            `▶ Abriendo protocolo oficial de desinstalación de Steam...\n` +
+            `ℹ Confirma la desinstalación en la ventana de Steam.\n` +
+            `🛡️ El cliente de Steam y el resto de la biblioteca permanecerán intactos.\n`
+    });
     const steamMatch = uninstallString.match(/steam:\/\/uninstall\/\d+/i);
     const steamUrl = steamMatch ? steamMatch[0] : null;
     const cmd = steamUrl ? `Start-Process '${steamUrl}'` : fixedUninstallString;
 
     spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true });
 
-    // Dar tiempo para que Steam procese o el usuario confirme
     setTimeout(() => {
-      triggerPurge('steam_auto');
+      if (!purgeStarted) {
+        event.sender.send('apps:uninstall-log', {
+          type: 'info',
+          text: `\nℹ Cuando la desinstalación en Steam termine, pulsa en la barra inferior 'El desinstalador ya terminó' para limpiar residuos de este juego.\n`
+        });
+      }
     }, 4000);
     return;
   }
 
+  // CASO C: APLICACIONES ESTÁNDAR
   try {
-    event.sender.send('apps:uninstall-log', { type: 'info', text: `[FASE 2] Ejecutando desinstalador estándar: ${fixedUninstallString}\n` });
+    event.sender.send('apps:uninstall-log', { type: 'info', text: `[FASE 2] Ejecutando desinstalador oficial: ${fixedUninstallString}\n` });
 
     const proc = spawn(fixedUninstallString, [], {
       shell: true,
@@ -1037,17 +1700,17 @@ Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppe
     });
 
     proc.on('error', (err) => {
-      event.sender.send('apps:uninstall-log', { type: 'warning', text: `[FASE 2] Aviso al ejecutar desinstalador: ${err.message}. Continuando con purga forzada...\n` });
+      event.sender.send('apps:uninstall-log', { type: 'warning', text: `[FASE 2] Aviso al ejecutar desinstalador: ${err.message}. Continuando con purga segura...\n` });
       triggerPurge('error');
     });
 
-    // Timeout de seguridad amplio (3 minutos) en caso de que el desinstalador quede en espera de entrada
+    // Timeout de seguridad amplio (4 minutos) en caso de que el desinstalador quede en espera
     setTimeout(() => {
       if (!purgeStarted) {
-        event.sender.send('apps:uninstall-log', { type: 'info', text: `⏱ Tiempo de espera superado. Procediendo con el escaneo y purga profunda...\n` });
+        event.sender.send('apps:uninstall-log', { type: 'info', text: `⏱ Tiempo de espera superado. Procediendo con el escaneo y purga segura...\n` });
         triggerPurge('timeout');
       }
-    }, 180000);
+    }, 240000);
 
   } catch (err) {
     event.sender.send('apps:uninstall-log', { type: 'error', text: `[FASE 2] Error al lanzar desinstalador: ${err.message}. Procediendo con purga directa...\n` });
