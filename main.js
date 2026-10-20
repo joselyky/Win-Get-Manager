@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -29,6 +29,40 @@ function buildEnv() {
   return { ...process.env, PATH: toAdd ? `${toAdd};${cur}` : cur };
 }
 
+// ─── Resolve Physical Script Path ─────────────────────────────────────────────
+// External processes like powershell.exe cannot access files packed inside app.asar.
+function getScriptPath(scriptName) {
+  // 1. Check resources/scripts outside asar (production standard)
+  if (process.resourcesPath) {
+    const resPath = path.join(process.resourcesPath, 'scripts', scriptName);
+    try {
+      if (fs.existsSync(resPath) && !resPath.toLowerCase().includes('.asar')) {
+        return resPath;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Check development folder if not packaged in asar
+  const devPath = path.join(__dirname, 'scripts', scriptName);
+  try {
+    if (fs.existsSync(devPath) && !devPath.toLowerCase().includes('.asar')) {
+      return devPath;
+    }
+  } catch (_) {}
+
+  // 3. If packed in asar, extract to os.tmpdir so external processes can access it
+  const tmpPath = path.join(os.tmpdir(), `winget_mgr_${scriptName}`);
+  try {
+    const content = fs.readFileSync(devPath, 'utf8');
+    fs.writeFileSync(tmpPath, '\ufeff' + content, 'utf8');
+    return tmpPath;
+  } catch (err) {
+    console.error(`[getScriptPath] Failed to extract ${scriptName} from asar:`, err.message);
+  }
+
+  return devPath;
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -43,7 +77,15 @@ function createWindow() {
   mainWindow.loadFile('index.html');
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // mainWindow.webContents.openDevTools({ mode: 'detach' });
+    // Silent check for app updates 3.5 seconds after launch
+    setTimeout(async () => {
+      try {
+        const updateInfo = await checkAppUpdatesCore({ silent: true });
+        if (updateInfo && updateInfo.updateAvailable && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app:update-available', updateInfo);
+        }
+      } catch (_) { }
+    }, 3500);
   });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -235,40 +277,71 @@ foreach ($item in $items) {
         $b64 = Get-IconBase64 $iconPath
     }
 
+    $pub = ""
+    if ($match -and $match.Publisher) {
+        $pub = ($match.Publisher + '').Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($pub)) {
+        if ($item.id -match '^([^.]+)\.') {
+            $pub = $matches[1]
+        } else {
+            $pub = "Desconocido"
+        }
+    }
+
+    [double]$sizeMb = 0
+    if ($match -and $match.EstimatedSize -and [int64]$match.EstimatedSize -gt 0) {
+        $sizeMb = [math]::Round([int64]$match.EstimatedSize / 1024, 2)
+    }
+
     $results += [PSCustomObject]@{
         id = $item.id
         iconBase64 = $b64
+        publisher = $pub
+        sizeMb = $sizeMb
     }
 }
 $results | ConvertTo-Json -Compress
 `;
 
-    const tmpPath = path.join(os.tmpdir(), `winget_icons_${Date.now()}.ps1`);
-    fs.writeFileSync(tmpPath, psScript, 'utf8');
+    const tmpPath = path.join(os.tmpdir(), `winget_icons_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.ps1`);
+    fs.writeFileSync(tmpPath, '\ufeff' + psScript, 'utf8');
 
-    const proc = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpPath], {
+    const proc = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', tmpPath
+    ], {
       windowsHide: true,
     });
 
     const chunks = [];
     proc.stdout.on('data', d => chunks.push(d));
     proc.on('close', () => {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
       const output = Buffer.concat(chunks).toString('utf8').trim();
       try {
         const parsed = JSON.parse(output);
         const iconList = Array.isArray(parsed) ? parsed : [parsed].filter(Boolean);
-        const map = new Map(iconList.map(i => [i.id, i.iconBase64]));
+        const map = new Map(iconList.map(i => [i.id, i]));
         packages.forEach(pkg => {
-          pkg.iconBase64 = map.get(pkg.id) || '';
+          const info = map.get(pkg.id);
+          pkg.iconBase64 = (info && info.iconBase64) || '';
+          pkg.publisher = (info && info.publisher) || (pkg.id.includes('.') ? pkg.id.split('.')[0] : 'Desconocido');
+          pkg.sizeMb = (info && info.sizeMb) ? Number(info.sizeMb) : 0;
         });
         resolve(packages);
       } catch (_) {
+        packages.forEach(pkg => {
+          if (!pkg.publisher) pkg.publisher = pkg.id.includes('.') ? pkg.id.split('.')[0] : 'Desconocido';
+          if (pkg.sizeMb === undefined) pkg.sizeMb = 0;
+        });
         resolve(packages);
       }
     });
     proc.on('error', () => {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
       resolve(packages);
     });
   });
@@ -311,11 +384,9 @@ ipcMain.handle('winget:list-upgrades', async () => {
 // ─── IPCMAIN: ENABLE WINGET IN TERMINAL ───────────────────────────────────────
 ipcMain.handle('winget:enable-in-terminal', async () => {
   return new Promise((resolve) => {
-    const scriptPath = path.join(__dirname, 'scripts', 'enable-winget.ps1');
-    const fallbackPath = path.join(process.resourcesPath || '', 'scripts', 'enable-winget.ps1');
-    const targetScript = fs.existsSync(scriptPath) ? scriptPath : fallbackPath;
+    const targetScript = getScriptPath('enable-winget.ps1');
 
-    if (!fs.existsSync(targetScript)) {
+    if (!fs.existsSync(targetScript) || targetScript.toLowerCase().includes('.asar')) {
       return resolve({
         success: false,
         error: `No se encontro el script de activacion en ${targetScript}`,
@@ -339,6 +410,71 @@ ipcMain.handle('winget:enable-in-terminal', async () => {
 
     proc.on('error', err => {
       resolve({ success: false, error: err.message, code: -1 });
+    });
+  });
+});
+
+// ─── IPCMAIN: EXPORT & IMPORT WINGET PACKAGES ─────────────────────────────────
+ipcMain.handle('winget:export-packages', async () => {
+  if (!mainWindow) return { success: false, error: 'Ventana no disponible' };
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Exportar lista de paquetes WinGet',
+    defaultPath: 'winget-packages.json',
+    filters: [{ name: 'Archivo JSON de WinGet', extensions: ['json'] }]
+  });
+
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  return new Promise((resolve) => {
+    const env = buildEnv();
+    const proc = spawn('winget', ['export', '-o', filePath, '--include-versions', '--accept-source-agreements'], {
+      env, shell: false, windowsHide: true
+    });
+
+    let stderr = '';
+    proc.stderr.on('data', d => { stderr += d.toString('utf8'); });
+    proc.on('close', code => {
+      resolve({ success: code === 0, filePath, code, error: stderr });
+    });
+    proc.on('error', err => {
+      resolve({ success: false, error: err.message });
+    });
+  });
+});
+
+ipcMain.handle('winget:import-packages', async () => {
+  if (!mainWindow) return { success: false, error: 'Ventana no disponible' };
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Importar lista de paquetes WinGet',
+    properties: ['openFile'],
+    filters: [{ name: 'Archivo JSON de WinGet', extensions: ['json'] }]
+  });
+
+  if (canceled || !filePaths?.length) return { success: false, canceled: true };
+
+  const filePath = filePaths[0];
+  return new Promise((resolve) => {
+    const env = buildEnv();
+    const proc = spawn('winget', ['import', '--import-file', filePath, '--accept-package-agreements', '--accept-source-agreements'], {
+      env, shell: false, windowsHide: true
+    });
+
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', d => {
+      const text = d.toString('utf8');
+      stdout += text;
+      mainWindow?.webContents.send('winget:log', { type: 'output', text });
+    });
+    proc.stderr.on('data', d => {
+      const text = d.toString('utf8');
+      stderr += text;
+      mainWindow?.webContents.send('winget:log', { type: 'warning', text });
+    });
+    proc.on('close', code => {
+      resolve({ success: code === 0, filePath, code, stdout, stderr });
+    });
+    proc.on('error', err => {
+      resolve({ success: false, error: err.message });
     });
   });
 });
@@ -980,212 +1116,53 @@ ipcMain.handle('system:info', async () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 ipcMain.handle('apps:list-installed', async () => {
   return new Promise((resolve) => {
-    // PowerShell script to extract installed apps with accurate sizes and native Base64 PNG icons
-    const psScriptContent = `
-Add-Type -AssemblyName System.Drawing
+    const targetScript = getScriptPath('list-installed.ps1');
 
-$paths = @(
-  "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
-  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
-  "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"
-)
-$apps = Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName -ne $null -and $_.SystemComponent -ne 1 -and $_.ParentKeyName -eq $null }
-
-$result = @()
-$seen = [System.Collections.Generic.HashSet[string]]::new()
-$fso = New-Object -ComObject Scripting.FileSystemObject
-
-function Get-DirectorySize([string]$dirPath) {
-    if ([string]::IsNullOrWhiteSpace($dirPath) -or !(Test-Path -LiteralPath $dirPath)) { return 0 }
-    try {
-        $folder = $fso.GetFolder($dirPath)
-        return [math]::round($folder.Size / 1MB, 2)
-    } catch {
-        try {
-            $sum = (Get-ChildItem -LiteralPath $dirPath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-            if ($sum) { return [math]::round($sum / 1MB, 2) }
-        } catch {}
-    }
-    return 0
-}
-
-function Clean-Path([string]$p) {
-    if ([string]::IsNullOrWhiteSpace($p)) { return "" }
-    $p = $p.Trim().Trim('"').Trim("'")
-    if ($p -match '^(.*?\\.(exe|ico|dll))(,|-|\\s|$)') {
-        $p = $matches[1]
-    } elseif ($p -match '^(.*?,\\d+)') {
-        $p = $p.Split(',')[0].Trim('"')
-    }
-    return $p
-}
-
-function Get-IconBase64([string]$filePath) {
-    if ([string]::IsNullOrWhiteSpace($filePath) -or !(Test-Path -LiteralPath $filePath)) { return "" }
-    try {
-        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($filePath)
-        if ($icon) {
-            $bmp = $icon.ToBitmap()
-            $ms = New-Object System.IO.MemoryStream
-            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-            $bytes = $ms.ToArray()
-            $b64 = [Convert]::ToBase64String($bytes)
-            $ms.Dispose()
-            $bmp.Dispose()
-            $icon.Dispose()
-            return $b64
-        }
-    } catch {}
-    return ""
-}
-
-$progFiles86 = $env:ProgramFiles + " (x86)"
-$progFiles = $env:ProgramFiles
-$localApp = $env:LOCALAPPDATA
-$roamApp = $env:APPDATA
-
-foreach ($app in $apps) {
-    $name = $app.DisplayName.Trim()
-    if ([string]::IsNullOrWhiteSpace($name)) { continue }
-    
-    $ver = if ($app.DisplayVersion) { $app.DisplayVersion.Trim() } else { "" }
-    $key = "$name|$ver"
-    if ($seen.Contains($key)) { continue }
-    $null = $seen.Add($key)
-
-    $sizeMb = 0
-    if ($app.EstimatedSize -and $app.EstimatedSize -gt 0) {
-        $sizeMb = [math]::round($app.EstimatedSize / 1024, 2)
+    if (!fs.existsSync(targetScript) || targetScript.toLowerCase().includes('.asar')) {
+      console.error('[apps:list-installed] Accessible physical script not found:', targetScript);
+      return resolve([]);
     }
 
-    $iconPath = ""
-    if ($app.DisplayIcon) {
-        $iconPath = Clean-Path $app.DisplayIcon
-    }
-
-    $installLoc = if ($app.InstallLocation) { $app.InstallLocation.Trim().Trim('"') } else { "" }
-
-    # If size is 0, estimate from installLocation or iconPath or uninstallString
-    if ($sizeMb -eq 0) {
-        if (![string]::IsNullOrWhiteSpace($installLoc) -and (Test-Path -LiteralPath $installLoc)) {
-            $sizeMb = Get-DirectorySize $installLoc
-        }
-        
-        if ($sizeMb -eq 0 -and ![string]::IsNullOrWhiteSpace($iconPath) -and (Test-Path -LiteralPath $iconPath)) {
-            $parent = Split-Path -Parent $iconPath
-            if (![string]::IsNullOrWhiteSpace($parent) -and $parent -ne "C:\\" -and $parent -ne "C:\\Windows\\System32" -and $parent -ne "C:\\Windows" -and (Test-Path -LiteralPath $parent)) {
-                $sizeMb = Get-DirectorySize $parent
-                if ([string]::IsNullOrWhiteSpace($installLoc)) { $installLoc = $parent }
-            }
-        }
-
-        if ($sizeMb -eq 0 -and $app.UninstallString) {
-            $uninstClean = Clean-Path $app.UninstallString
-            if (![string]::IsNullOrWhiteSpace($uninstClean) -and (Test-Path -LiteralPath $uninstClean)) {
-                $parent = Split-Path -Parent $uninstClean
-                if (![string]::IsNullOrWhiteSpace($parent) -and $parent -ne "C:\\" -and $parent -ne "C:\\Windows\\System32" -and $parent -ne "C:\\Windows" -and (Test-Path -LiteralPath $parent)) {
-                    $sizeMb = Get-DirectorySize $parent
-                    if ([string]::IsNullOrWhiteSpace($installLoc)) { $installLoc = $parent }
-                }
-            }
-        }
-        
-        # Check Program Files / AppData common folders
-        if ($sizeMb -eq 0) {
-            $cleanFolderName = $name -replace '[\\\\/:*?"<>|]', ''
-            $commonDirs = @(
-                "$progFiles\\$cleanFolderName",
-                "$progFiles86\\$cleanFolderName",
-                "$localApp\\Programs\\$cleanFolderName",
-                "$localApp\\$cleanFolderName",
-                "$roamApp\\$cleanFolderName"
-            )
-            foreach ($cd in $commonDirs) {
-                if (Test-Path -LiteralPath $cd) {
-                    $sz = Get-DirectorySize $cd
-                    if ($sz -gt 0) {
-                        $sizeMb = $sz
-                        if ([string]::IsNullOrWhiteSpace($installLoc)) { $installLoc = $cd }
-                        break
-                    }
-                }
-            }
-        }
-    }
-
-    # If iconPath is not found or invalid, try to find .exe in installLoc or commonDirs
-    if ([string]::IsNullOrWhiteSpace($iconPath) -or !(Test-Path -LiteralPath $iconPath)) {
-        if (![string]::IsNullOrWhiteSpace($installLoc) -and (Test-Path -LiteralPath $installLoc)) {
-            $exe = Get-ChildItem -LiteralPath $installLoc -Filter "*.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($exe) { $iconPath = $exe.FullName }
-        }
-    }
-
-    # Extract native Base64 icon
-    $iconBase64 = ""
-    if (![string]::IsNullOrWhiteSpace($iconPath)) {
-        $iconBase64 = Get-IconBase64 $iconPath
-    }
-
-    # Fallback size for utilities
-    if ($sizeMb -eq 0) {
-        if (![string]::IsNullOrWhiteSpace($iconPath) -and (Test-Path -LiteralPath $iconPath)) {
-            $item = Get-Item -LiteralPath $iconPath -ErrorAction SilentlyContinue
-            if ($item) {
-                $sizeMb = [math]::max(0.5, [math]::round($item.Length / 1MB, 2))
-            }
-        }
-    }
-    if ($sizeMb -eq 0) {
-        $sizeMb = 1.0
-    }
-
-    $result += [PSCustomObject]@{
-        name = $name
-        version = $ver
-        publisher = if ($app.Publisher) { $app.Publisher.Trim() } else { "Desconocido" }
-        sizeMb = $sizeMb
-        installLocation = $installLoc
-        iconBase64 = $iconBase64
-        uninstallString = $app.UninstallString
-        id = $app.PSChildName
-    }
-}
-$result | ConvertTo-Json -Compress
-`;
-
-    const tmpScriptPath = path.join(os.tmpdir(), `winget_mgr_list_${Date.now()}.ps1`);
-    fs.writeFileSync(tmpScriptPath, psScriptContent, 'utf8');
-
-    const proc = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpScriptPath], {
+    const proc = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', targetScript
+    ], {
       windowsHide: true,
+      maxBuffer: 50 * 1024 * 1024
     });
 
-    const chunks = [];
-    proc.stdout.on('data', d => chunks.push(d));
-    proc.on('close', () => {
-      // Cleanup temp file
-      try { fs.unlinkSync(tmpScriptPath); } catch (_) {}
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString('utf8'); });
+    proc.stderr.on('data', d => { stderr += d.toString('utf8'); });
 
-      const output = Buffer.concat(chunks).toString('utf8').trim();
+    proc.on('close', code => {
       try {
-        const apps = JSON.parse(output);
+        const text = stdout.trim();
+        if (!text) {
+          console.warn('[apps:list-installed] Empty stdout. Stderr:', stderr);
+          return resolve([]);
+        }
+        const apps = JSON.parse(text);
         const appsArray = Array.isArray(apps) ? apps : [apps].filter(Boolean);
         resolve(appsArray);
       } catch (err) {
+        console.error('[apps:list-installed] JSON parse error:', err.message);
         resolve([]);
       }
     });
-    proc.on('error', () => {
-      try { fs.unlinkSync(tmpScriptPath); } catch (_) {}
+
+    proc.on('error', (err) => {
+      console.error('[apps:list-installed] Process spawn error:', err);
       resolve([]);
     });
   });
 });
 
 ipcMain.on('apps:uninstall-clean', (event, appInfo) => {
-  const { name, publisher, uninstallString, installLocation, id } = appInfo;
+  const { name, publisher, uninstallString, installLocation, id, createRestorePoint } = appInfo;
 
   if (!uninstallString) {
     event.sender.send('apps:uninstall-log', { type: 'error', text: '✖ No se encontró comando de desinstalación para esta aplicación.\n' });
@@ -1312,6 +1289,7 @@ $appId = ${JSON.stringify(id || '')}
 $safeInstallLoc = ${JSON.stringify(safeInstallLoc || '')}
 $tokens = @(${tokens.map(t => JSON.stringify(t)).join(', ')})
 $isLauncherManaged = ${isLauncherManaged ? '$true' : '$false'}
+$createRestorePoint = ${createRestorePoint ? '$true' : '$false'}
 
 $deletedDirs = 0
 $purgedKeys = 0
@@ -1384,7 +1362,40 @@ if (![string]::IsNullOrWhiteSpace($safeInstallLoc)) {
     } catch {}
 }
 
-# ─── FASE 3A & 4C: Escaneo y Purga de Claves de Registro ───────────────────────
+# ─── FASE 3A & 4C: Punto de Restauración y Respaldo .REG ─────────────────────────
+$backupDir = Join-Path $env:LOCALAPPDATA "WinGetManager\\RegistryBackups"
+try {
+    if (!(Test-Path -LiteralPath $backupDir)) {
+        New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+    }
+} catch {}
+
+function Backup-RegKey([string]$psPath, [string]$label) {
+    try {
+        $cleanKey = $psPath.Replace('Microsoft.PowerShell.Core\\Registry::', '').Replace('HKLM:\\', 'HKLM\\').Replace('HKCU:\\', 'HKCU\\')
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $safeName = ($cleanName + "_" + $label + "_" + $timestamp) -replace '[\\\\/:*?"<>|\\s]', '_'
+        $backupFile = Join-Path $backupDir "$safeName.reg"
+        & reg.exe export "$cleanKey" "$backupFile" /y 2>$null | Out-Null
+        if (Test-Path -LiteralPath $backupFile) {
+            Write-Output "LOG:output|  [RESPALDO .REG] Clave respaldada de forma segura en: $backupFile"
+        }
+    } catch {}
+}
+
+# Comprobar y crear Punto de Restauración del Sistema en Windows (Opcional)
+if ($createRestorePoint) {
+    try {
+        Write-Output "LOG:info|  [PUNTO DE RESTAURACIÓN] Creando Punto de Restauración del Sistema en Windows..."
+        $null = Checkpoint-Computer -Description "WinGet Manager - Limpieza $cleanName" -RestorePointType "APPLICATION_UNINSTALL" -ErrorAction Stop
+        Write-Output "LOG:success|  [PUNTO DE RESTAURACIÓN] Punto de Restauración del Sistema creado con éxito."
+    } catch {
+        Write-Output "LOG:output|  [PUNTO DE RESTAURACIÓN] Punto del sistema gestionado por directiva de Windows o intervalo de 24h."
+    }
+} else {
+    Write-Output "LOG:info|  [PUNTO DE RESTAURACIÓN] Omitido por configuración de usuario (Ahorro de espacio en disco)."
+}
+
 Write-Output "LOG:info|[FASE 3] Inspeccionando registro de forma segura..."
 
 $regRoots = @(
@@ -1411,6 +1422,7 @@ foreach ($regRoot in $regRoots) {
                     $ckName = $ck.PSChildName
                     $ckNorm = ($ckName -replace '[^a-zA-Z0-9]', '').ToLower()
                     if ($ckNorm -eq $normApp -or ($normApp.Length -ge 4 -and $ckNorm.StartsWith($normApp))) {
+                        Backup-RegKey $ck.PSPath $ckName
                         Write-Output "LOG:output|  [FASE 4] Purgando clave residual del juego en $($sk.Name): $ckName"
                         Remove-Item -LiteralPath $ck.PSPath -Recurse -Force -ErrorAction SilentlyContinue
                         $purgedKeys++
@@ -1429,6 +1441,7 @@ foreach ($regRoot in $regRoots) {
             }
 
             if ($isMatch) {
+                Backup-RegKey $sk.PSPath $kName
                 Write-Output "LOG:output|  [FASE 4] Purgando clave de registro residual: $($sk.Name)"
                 Remove-Item -LiteralPath $sk.PSPath -Recurse -Force -ErrorAction SilentlyContinue
                 $purgedKeys++
@@ -1446,6 +1459,7 @@ if (![string]::IsNullOrWhiteSpace($appId)) {
     )
     foreach ($urp in $uninstallRegPaths) {
         if (Test-Path -LiteralPath $urp) {
+            Backup-RegKey $urp "UninstallEntry"
             Write-Output "LOG:output|  [FASE 4] Limpiando registro de desinstalación de Windows..."
             Remove-Item -LiteralPath $urp -Recurse -Force -ErrorAction SilentlyContinue
             $purgedKeys++
@@ -1541,10 +1555,15 @@ foreach ($target in $dirsToPurge) {
 Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppedServices"
 `;
 
-    const tmpScriptPath = path.join(os.tmpdir(), `winget_clean_engine_${Date.now()}.ps1`);
-    fs.writeFileSync(tmpScriptPath, '\ufeff' + psScript, 'utf8');
+    const tmpCleanPath = path.join(os.tmpdir(), `winget_clean_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.ps1`);
+    fs.writeFileSync(tmpCleanPath, '\ufeff' + psScript, 'utf8');
 
-    const cleanProc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpScriptPath], {
+    const cleanProc = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', tmpCleanPath
+    ], {
       windowsHide: true,
     });
 
@@ -1583,7 +1602,7 @@ Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppe
     const finalizeClean = () => {
       if (isCleanDone) return;
       isCleanDone = true;
-      try { fs.unlinkSync(tmpScriptPath); } catch (_) {}
+      try { if (fs.existsSync(tmpCleanPath)) fs.unlinkSync(tmpCleanPath); } catch (_) {}
 
       const s = summaryData || { deletedDirs: 0, purgedKeys: 0, rebootFiles: 0, killedProcs: 0, stoppedServices: 0 };
       event.sender.send('apps:uninstall-log', {
@@ -1603,7 +1622,7 @@ Write-Output "SUMMARY|$deletedDirs|$purgedKeys|$rebootFiles|$killedProcs|$stoppe
     cleanProc.on('close', finalizeClean);
 
     cleanProc.on('error', (err) => {
-      try { fs.unlinkSync(tmpScriptPath); } catch (_) {}
+      try { if (fs.existsSync(tmpCleanPath)) fs.unlinkSync(tmpCleanPath); } catch (_) {}
       event.sender.send('apps:uninstall-log', { type: 'error', text: `✖ Error al ejecutar motor de limpieza: ${err.message}\n` });
       event.sender.send('apps:uninstall-done', { success: false });
     });
@@ -1884,13 +1903,22 @@ $result | ConvertTo-Json -Depth 4
 `;
 
   return new Promise((resolve) => {
-    const tmp = path.join(os.tmpdir(), `winget_gpu_detect_${Date.now()}.ps1`);
+    const tmp = path.join(os.tmpdir(), `winget_gpu_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.ps1`);
     fs.writeFileSync(tmp, '\ufeff' + psScript, 'utf8');
-    const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp]);
+
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', tmp
+    ], {
+      windowsHide: true,
+    });
+
     let out = '';
     ps.stdout.on('data', d => out += d);
     ps.on('close', () => {
-      try { fs.unlinkSync(tmp); } catch (_) {}
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
       try {
         const data = JSON.parse(out.trim());
         resolve({ success: true, data });
@@ -1899,7 +1927,7 @@ $result | ConvertTo-Json -Depth 4
       }
     });
     ps.on('error', (err) => {
-      try { fs.unlinkSync(tmp); } catch (_) {}
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
       resolve({ success: false, error: err.message });
     });
   });
@@ -1966,4 +1994,707 @@ ipcMain.handle('gpu:launch-app', async (event, appIdOrPath) => {
     ps.on('error', (err) => resolve({ success: false, error: err.message }));
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// System Restore Points Handlers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function runElevatedPsScript(scriptContent) {
+  return new Promise((resolve) => {
+    const id = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const tmpScript = path.join(os.tmpdir(), `wg_elev_${id}.ps1`);
+    const tmpLauncher = path.join(os.tmpdir(), `wg_launch_${id}.ps1`);
+    const tmpJson = path.join(os.tmpdir(), `wg_out_${id}.json`);
+
+    const actualElevatedScript = scriptContent.replace(/__OUT_JSON__/g, tmpJson.replace(/'/g, "''"));
+
+    const launcherContent = `
+$ErrorActionPreference = 'Stop'
+try {
+  $p = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '${tmpScript.replace(/'/g, "''")}') -Verb RunAs -Wait -PassThru -WindowStyle Hidden
+} catch {
+  $json = @{ success = $false; error = "Operación cancelada o rechazada en el diálogo de Administrador (UAC)." } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('${tmpJson.replace(/'/g, "''")}', $json, [System.Text.Encoding]::UTF8)
+}
+`;
+
+    try {
+      fs.writeFileSync(tmpScript, '\ufeff' + actualElevatedScript, 'utf8');
+      fs.writeFileSync(tmpLauncher, '\ufeff' + launcherContent, 'utf8');
+    } catch (err) {
+      return resolve({ success: false, error: `Error creando script temporal: ${err.message}` });
+    }
+
+    const proc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmpLauncher], {
+      windowsHide: true
+    });
+
+    proc.on('close', () => {
+      try { fs.unlinkSync(tmpLauncher); } catch (_) {}
+      try { fs.unlinkSync(tmpScript); } catch (_) {}
+
+      try {
+        if (fs.existsSync(tmpJson)) {
+          let content = fs.readFileSync(tmpJson, 'utf8');
+          try { fs.unlinkSync(tmpJson); } catch (_) {}
+          // Strip BOM if present
+          if (content.charCodeAt(0) === 0xFEFF) {
+            content = content.slice(1);
+          }
+          const data = JSON.parse(content.trim());
+          return resolve(data);
+        }
+      } catch (e) {
+        return resolve({ success: false, error: `Error procesando resultado: ${e.message}` });
+      }
+
+      resolve({ success: false, error: 'No se pudo completar la operación con permisos de administrador.' });
+    });
+
+    proc.on('error', (e) => {
+      try { fs.unlinkSync(tmpLauncher); } catch (_) {}
+      try { fs.unlinkSync(tmpScript); } catch (_) {}
+      resolve({ success: false, error: e.message });
+    });
+  });
+}
+
+function runElevatedRestoreList(resolve) {
+  const psElevated = `
+$ErrorActionPreference = 'SilentlyContinue'
+$points = @()
+try {
+  $raw = Get-ComputerRestorePoint
+  foreach ($p in $raw) {
+    $cDate = ""
+    try {
+      $cDate = ([System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime)).ToString("dd/MM/yyyy HH:mm:ss")
+    } catch {
+      try {
+        $cDate = ([datetime]$p.CreationTime).ToString("dd/MM/yyyy HH:mm:ss")
+      } catch {
+        $cDate = [string]$p.CreationTime
+      }
+    }
+    $typeName = switch ($p.RestorePointType) {
+      0 { "Instalación de aplicación" }
+      1 { "Desinstalación de aplicación" }
+      10 { "Instalación de dispositivo" }
+      12 { "Modificación de configuración" }
+      13 { "Punto de control del sistema" }
+      default { "Punto del sistema" }
+    }
+    $points += @{
+      sequenceNumber = [int]$p.SequenceNumber
+      description = [string]$p.Description
+      creationTime = $cDate
+      restorePointType = [int]$p.RestorePointType
+      typeName = $typeName
+      eventType = [int]$p.EventType
+    }
+  }
+} catch {}
+
+$regKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'
+$srEnabled = $true
+try {
+  $prop = Get-ItemProperty -Path $regKey -ErrorAction SilentlyContinue
+  if ($prop -and $prop.DisableSR -eq 1) { $srEnabled = $false }
+} catch {}
+
+$json = @{ success = $true; enabled = $srEnabled; points = $points } | ConvertTo-Json -Depth 4 -Compress
+[System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+`;
+  runElevatedPsScript(psElevated).then(resolve);
+}
+
+function runElevatedRestoreCreate(description, resolve) {
+  const cleanDesc = (description || 'WinGet Manager - Punto manual').replace(/['"]/g, '').trim();
+  const psElevated = `
+$ErrorActionPreference = 'Stop'
+try {
+  $regPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'
+  if (-not (Test-Path -LiteralPath $regPath)) {
+    New-Item -Path $regPath -Force | Out-Null
+  }
+  Set-ItemProperty -Path $regPath -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+
+  Set-Service -Name 'vss' -StartupType Manual -ErrorAction SilentlyContinue
+  Start-Service -Name 'vss' -ErrorAction SilentlyContinue
+
+  $drive = $env:SystemDrive
+  if ($drive) {
+    Enable-ComputerRestore -Drive "$drive\\" -ErrorAction SilentlyContinue
+  }
+
+  Checkpoint-Computer -Description '${cleanDesc.replace(/'/g, "''")}' -RestorePointType "APPLICATION_INSTALL" -ErrorAction Stop
+
+  $json = @{ success = $true; message = "Punto de restauración creado con éxito." } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+} catch {
+  $json = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+}
+`;
+  runElevatedPsScript(psElevated).then(resolve);
+}
+
+ipcMain.handle('restore:list', async (_event, opts = {}) => {
+  return new Promise((resolve) => {
+    if (opts && opts.elevate) {
+      return runElevatedRestoreList(resolve);
+    }
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+try {
+    $sysDrive = $env:SystemDrive
+    $srEnabled = $true
+    try {
+        $regKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'
+        $prop = Get-ItemProperty -Path $regKey -ErrorAction SilentlyContinue
+        if ($prop -and $prop.DisableSR -eq 1) {
+            $srEnabled = $false
+        }
+    } catch {}
+
+    $points = @()
+    $raw = Get-ComputerRestorePoint
+    foreach ($p in $raw) {
+        $cDate = ""
+        try {
+            $cDate = ([System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime)).ToString("dd/MM/yyyy HH:mm:ss")
+        } catch {
+            try {
+                $cDate = ([datetime]$p.CreationTime).ToString("dd/MM/yyyy HH:mm:ss")
+            } catch {
+                $cDate = [string]$p.CreationTime
+            }
+        }
+        $typeName = switch ($p.RestorePointType) {
+            0 { "Instalación de aplicación" }
+            1 { "Desinstalación de aplicación" }
+            10 { "Instalación de dispositivo" }
+            12 { "Modificación de configuración" }
+            13 { "Punto de control del sistema" }
+            default { "Punto del sistema" }
+        }
+        $points += @{
+            sequenceNumber = [int]$p.SequenceNumber
+            description = [string]$p.Description
+            creationTime = $cDate
+            restorePointType = [int]$p.RestorePointType
+            typeName = $typeName
+            eventType = [int]$p.EventType
+        }
+    }
+
+    @{
+        success = $true
+        enabled = $srEnabled
+        points = $points
+    } | ConvertTo-Json -Depth 4 -Compress
+} catch {
+    $isDenied = ($_.Exception.Message -like "*Acceso denegado*" -or $_.Exception.Message -like "*Access is denied*" -or $_.FullyQualifiedErrorId -like "*PermissionDenied*" -or $_.FullyQualifiedErrorId -like "*GetWMIManagementException*")
+    @{
+        success = $false
+        requiresAdmin = $isDenied
+        error = $_.Exception.Message
+    } | ConvertTo-Json -Depth 3 -Compress
+}
+`;
+
+    const proc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+      windowsHide: true
+    });
+
+    let out = '';
+    let err = '';
+    proc.stdout.on('data', d => { out += d.toString('utf8'); });
+    proc.stderr.on('data', d => { err += d.toString('utf8'); });
+
+    proc.on('close', () => {
+      try {
+        let jsonMatch = out.trim();
+        if (jsonMatch.charCodeAt(0) === 0xFEFF) {
+          jsonMatch = jsonMatch.slice(1);
+        }
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch.trim());
+          if (parsed.success) {
+            return resolve(parsed);
+          }
+          if (parsed.requiresAdmin && opts.elevate) {
+            return runElevatedRestoreList(resolve);
+          }
+          return resolve(parsed);
+        }
+      } catch (_) {}
+      if (opts.elevate) {
+        return runElevatedRestoreList(resolve);
+      }
+      resolve({ success: false, requiresAdmin: true, error: err || 'Acceso denegado' });
+    });
+
+    proc.on('error', (e) => {
+      resolve({ success: false, error: e.message });
+    });
+  });
+});
+
+ipcMain.handle('restore:create', async (_event, description) => {
+  const cleanDesc = (description || 'WinGet Manager - Punto manual').replace(/["`$'\\]/g, '').trim();
+  return new Promise((resolve) => {
+    // 1. First try direct Checkpoint-Computer in case process is already elevated
+    const directScript = `
+$ErrorActionPreference = 'Stop'
+try {
+  Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore' -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+  Enable-ComputerRestore -Drive "$($env:SystemDrive)\\" -ErrorAction SilentlyContinue
+  Checkpoint-Computer -Description "${cleanDesc}" -RestorePointType "APPLICATION_INSTALL" -ErrorAction Stop
+  @{ success = $true; message = "Punto de restauración creado con éxito." } | ConvertTo-Json -Compress
+} catch {
+  @{ success = $false; requiresAdmin = $true; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}
+`;
+
+    const proc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', directScript], {
+      windowsHide: true
+    });
+    let out = '';
+    proc.stdout.on('data', d => { out += d.toString('utf8'); });
+
+    proc.on('close', () => {
+      try {
+        let directOut = out.trim();
+        if (directOut.charCodeAt(0) === 0xFEFF) {
+          directOut = directOut.slice(1);
+        }
+        if (directOut) {
+          const parsed = JSON.parse(directOut.trim());
+          if (parsed.success) return resolve(parsed);
+        }
+      } catch (_) {}
+      // If direct attempt failed (needs elevation), request UAC elevation via launcher .ps1
+      runElevatedRestoreCreate(cleanDesc, resolve);
+    });
+
+    proc.on('error', () => {
+      runElevatedRestoreCreate(cleanDesc, resolve);
+    });
+  });
+});
+
+ipcMain.handle('restore:open-wizard', async () => {
+  try {
+    const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+    const rstruiPath = path.join(sysRoot, 'System32', 'rstrui.exe');
+    // Using PowerShell Start-Process invokes ShellExecuteEx which handles UAC without throwing EACCES
+    const p = spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process -FilePath '${rstruiPath.replace(/'/g, "''")}'`], {
+      windowsHide: true
+    });
+    p.on('error', () => {});
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('restore:open-settings', async () => {
+  try {
+    const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+    const sysPropPath = path.join(sysRoot, 'System32', 'SystemPropertiesProtection.exe');
+    const p = spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process -FilePath '${sysPropPath.replace(/'/g, "''")}'`], {
+      windowsHide: true
+    });
+    p.on('error', () => {});
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+function runElevatedRestoreDelete(sequenceNumber, resolve) {
+  const seq = parseInt(sequenceNumber, 10);
+  if (isNaN(seq) || seq <= 0) {
+    return resolve({ success: false, error: 'Número de secuencia de punto de restauración inválido.' });
+  }
+
+  const psElevated = `
+$ErrorActionPreference = 'Stop'
+try {
+  $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class SrRemover {
+    [DllImport("srclient.dll", SetLastError = true)]
+    public static extern int SRRemoveRestorePoint(int sequenceNumber);
+}
+'@
+  if (-not ([System.Management.Automation.PSTypeName]'SrRemover').Type) {
+    Add-Type -TypeDefinition $code -Language CSharp
+  }
+
+  $ret = [SrRemover]::SRRemoveRestorePoint(${seq})
+  if ($ret -eq 0) {
+    $json = @{ success = $true; message = "Punto de restauración #${seq} eliminado con éxito." } | ConvertTo-Json -Compress
+  } else {
+    $stillExists = $false
+    try {
+      $pts = Get-ComputerRestorePoint
+      $match = $pts | Where-Object { [int]$_.SequenceNumber -eq ${seq} }
+      if ($match) { $stillExists = $true }
+    } catch {}
+
+    if (-not $stillExists) {
+      $json = @{ success = $true; message = "Punto de restauración #${seq} eliminado con éxito." } | ConvertTo-Json -Compress
+    } else {
+      $json = @{ success = $false; error = "Windows devolvió el código de error $ret al eliminar el punto #${seq}." } | ConvertTo-Json -Compress
+    }
+  }
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+} catch {
+  $json = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+}
+`;
+  runElevatedPsScript(psElevated).then(resolve);
+}
+
+function runElevatedRestoreDeleteAll(resolve) {
+  const psElevated = `
+$ErrorActionPreference = 'SilentlyContinue'
+try {
+  $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class SrRemoverAll {
+    [DllImport("srclient.dll", SetLastError = true)]
+    public static extern int SRRemoveRestorePoint(int sequenceNumber);
+}
+'@
+  if (-not ([System.Management.Automation.PSTypeName]'SrRemoverAll').Type) {
+    Add-Type -TypeDefinition $code -Language CSharp
+  }
+
+  $raw = Get-ComputerRestorePoint
+  foreach ($p in $raw) {
+    $s = [int]$p.SequenceNumber
+    if ($s -gt 0) {
+      [SrRemoverAll]::SRRemoveRestorePoint($s) | Out-Null
+    }
+  }
+
+  & vssadmin.exe delete shadows /all /quiet | Out-Null
+
+  $json = @{ success = $true; message = "Se han eliminado todos los puntos de restauración con éxito." } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+} catch {
+  $json = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+}
+`;
+  runElevatedPsScript(psElevated).then(resolve);
+}
+
+ipcMain.handle('restore:enable', async () => {
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $drive = $env:SystemDrive
+  if ($drive) {
+    Enable-ComputerRestore -Drive "$drive\\" -ErrorAction Stop
+  }
+  $json = @{ success = $true } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+} catch {
+  $json = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText('__OUT_JSON__', $json, [System.Text.Encoding]::UTF8)
+}
+`;
+  return runElevatedPsScript(script);
+});
+
+ipcMain.handle('restore:delete', async (_event, sequenceNumber) => {
+  return new Promise((resolve) => {
+    runElevatedRestoreDelete(sequenceNumber, resolve);
+  });
+});
+
+ipcMain.handle('restore:delete-all', async () => {
+  return new Promise((resolve) => {
+    runElevatedRestoreDeleteAll(resolve);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP SELF-UPDATER (GitHub Releases)
+// ═══════════════════════════════════════════════════════════════════════════════
+const GITHUB_OWNER = 'joselyky';
+const GITHUB_REPO = 'Win-Get-Manager';
+const APP_CURRENT_VERSION = app.getVersion() || '1.0.2';
+
+/**
+ * Compare two semver version strings.
+ * Returns true if remote is strictly greater than local.
+ */
+function isNewerVersion(remote, local) {
+  try {
+    const semver = require('semver');
+    const rClean = semver.clean(remote) || semver.valid(semver.coerce(remote));
+    const lClean = semver.clean(local) || semver.valid(semver.coerce(local));
+    if (rClean && lClean && semver.gt(rClean, lClean)) {
+      return true;
+    }
+  } catch (_) { }
+
+  // Robust segment-by-segment comparison (handles 1.0.3 vs 1.0.2, 1.0.2.1 vs 1.0.2, etc.)
+  const rNums = (remote || '').replace(/^[^\d]*/, '').split(/[.-]/).map(n => parseInt(n, 10)).filter(n => !isNaN(n));
+  const lNums = (local || '').replace(/^[^\d]*/, '').split(/[.-]/).map(n => parseInt(n, 10)).filter(n => !isNaN(n));
+  const maxLen = Math.max(rNums.length, lNums.length);
+  for (let i = 0; i < maxLen; i++) {
+    const r = rNums[i] || 0;
+    const l = lNums[i] || 0;
+    if (r > l) return true;
+    if (r < l) return false;
+  }
+  return false;
+}
+
+/**
+ * Fetch JSON from an HTTP/HTTPS endpoint following redirects.
+ */
+function fetchJson(url, maxRedirects = 5) {
+  return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) return reject(new Error('Demasiadas redirecciones HTTP'));
+    const parsed = new URL(url);
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(url, {
+      headers: {
+        'User-Agent': 'WinGet-Manager-AutoUpdater',
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const nextUrl = new URL(res.headers.location, url).href;
+        return fetchJson(nextUrl, maxRedirects - 1).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`GitHub API HTTP ${res.statusCode}: ${res.statusMessage || ''}`));
+      }
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(raw));
+        } catch (e) {
+          reject(new Error('Respuesta inválida de GitHub API'));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(12000, () => {
+      req.destroy();
+      reject(new Error('Tiempo de espera agotado al consultar el repositorio'));
+    });
+  });
+}
+
+/**
+ * Find the most suitable installer executable in release assets.
+ */
+function selectReleaseAsset(assets = []) {
+  if (!Array.isArray(assets) || assets.length === 0) return null;
+  // 1. Prefer setup/installer executable
+  const setup = assets.find(a => /\.exe$/i.test(a.name) && /setup|installer/i.test(a.name));
+  if (setup) return setup;
+  // 2. Any executable
+  const anyExe = assets.find(a => /\.exe$/i.test(a.name));
+  if (anyExe) return anyExe;
+  // 3. First asset
+  return assets[0] || null;
+}
+
+/**
+ * Check for updates against GitHub Releases.
+ */
+async function checkAppUpdatesCore(opts = {}) {
+  const currentVersion = APP_CURRENT_VERSION;
+  try {
+    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+    const release = await fetchJson(url);
+
+    if (!release || !release.tag_name) {
+      return { updateAvailable: false, currentVersion, message: 'No se encontraron versiones en el repositorio.' };
+    }
+
+    const latestVersion = (release.tag_name || '').replace(/^v/i, '').trim();
+    const isNewer = isNewerVersion(latestVersion, currentVersion);
+
+    const asset = selectReleaseAsset(release.assets);
+
+    const result = {
+      updateAvailable: isNewer,
+      currentVersion,
+      latestVersion,
+      releaseTag: release.tag_name,
+      releaseName: release.name || release.tag_name,
+      releaseNotes: release.body || 'Sin notas de la versión proporcionadas.',
+      publishedAt: release.published_at,
+      htmlUrl: release.html_url,
+      assetName: asset ? asset.name : null,
+      assetSize: asset ? asset.size : 0,
+      downloadUrl: asset ? asset.browser_download_url : null
+    };
+
+    return result;
+  } catch (err) {
+    return {
+      updateAvailable: false,
+      currentVersion,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Download update asset stream with progress events.
+ */
+function downloadUpdateAsset(downloadUrl, assetName, onProgress) {
+  return new Promise((resolve, reject) => {
+    const updateDir = path.join(os.tmpdir(), 'WinGetManagerUpdate');
+    if (!fs.existsSync(updateDir)) {
+      fs.mkdirSync(updateDir, { recursive: true });
+    }
+
+    const safeName = assetName ? path.basename(assetName) : `WinGet-Manager-Update-${Date.now()}.exe`;
+    const destPath = path.join(updateDir, safeName);
+
+    const makeRequest = (currentUrl, redirectsLeft = 5) => {
+      if (redirectsLeft <= 0) return reject(new Error('Demasiadas redirecciones durante la descarga'));
+
+      const parsed = new URL(currentUrl);
+      const client = parsed.protocol === 'https:' ? https : http;
+
+      const req = client.get(currentUrl, {
+        headers: {
+          'User-Agent': 'WinGet-Manager-AutoUpdater',
+          'Accept': 'application/octet-stream'
+        }
+      }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const nextUrl = new URL(res.headers.location, currentUrl).href;
+          return makeRequest(nextUrl, redirectsLeft - 1);
+        }
+
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Fallo en la descarga HTTP ${res.statusCode}: ${res.statusMessage || ''}`));
+        }
+
+        const total = parseInt(res.headers['content-length'] || '0', 10);
+        let transferred = 0;
+        let lastTime = Date.now();
+        let lastTransferred = 0;
+        let speed = 0;
+
+        const fileStream = fs.createWriteStream(destPath);
+
+        res.on('data', chunk => {
+          transferred += chunk.length;
+          const now = Date.now();
+          if (now - lastTime >= 350) {
+            speed = (transferred - lastTransferred) / ((now - lastTime) / 1000);
+            lastTime = now;
+            lastTransferred = transferred;
+            const percent = total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : null;
+            if (onProgress) {
+              onProgress({ transferred, total, percent, speed });
+            }
+          }
+        });
+
+        res.pipe(fileStream);
+
+        fileStream.on('finish', () => {
+          fileStream.close(() => {
+            if (onProgress) {
+              onProgress({ transferred, total, percent: 100, speed: 0 });
+            }
+            resolve(destPath);
+          });
+        });
+
+        fileStream.on('error', err => {
+          try { fs.unlinkSync(destPath); } catch (_) { }
+          reject(err);
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(120000, () => {
+        req.destroy();
+        reject(new Error('Tiempo de espera agotado al descargar la actualización'));
+      });
+    };
+
+    makeRequest(downloadUrl);
+  });
+}
+
+// ─── IPC Handlers for Self-Update ─────────────────────────────────────────────
+ipcMain.handle('app:get-version', () => APP_CURRENT_VERSION);
+
+ipcMain.handle('app:check-for-updates', async (_event, opts = {}) => {
+  const result = await checkAppUpdatesCore(opts);
+  return result;
+});
+
+ipcMain.handle('app:download-update', async (_event, data = {}) => {
+  const { downloadUrl, assetName } = data;
+  if (!downloadUrl) {
+    return { success: false, error: 'URL de descarga no proporcionada' };
+  }
+
+  try {
+    const filePath = await downloadUpdateAsset(downloadUrl, assetName, (progress) => {
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app:update-download-progress', progress);
+        }
+      } catch (_) { }
+    });
+    return { success: true, filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('app:install-update', async (_event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { success: false, error: 'El archivo descargado no existe en disco.' };
+  }
+
+  try {
+    // Launch installer detached so it continues after app exits
+    const child = spawn(filePath, [], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+
+    // Close current app smoothly after a short pause
+    setTimeout(() => {
+      try {
+        app.isQuitting = true;
+        app.quit();
+      } catch (_) { }
+    }, 600);
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+
 

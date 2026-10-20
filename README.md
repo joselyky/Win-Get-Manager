@@ -1,25 +1,28 @@
-# WinGet Manager 🚀
+# WinGet Manager ⚡
 
-Panel de control moderno e intuitivo para Windows diseñado para gestionar, actualizar y desinstalar aplicaciones mediante **Windows Package Manager (WinGet)**, además de monitorear y actualizar controladores gráficos (GPU).
+Panel de control moderno e intuitivo para Windows diseñado para gestionar, actualizar y desinstalar aplicaciones mediante **Windows Package Manager (WinGet)**, además de monitorear hardware gráfico, puntos de restauración del sistema y auto-actualizarse directamente desde GitHub Releases.
 
 ---
 
-## ✨ Características
+## 🚀 Principales Características
 
+- 🔄 **Sistema de Auto-Actualización Oficial (Auto-Updater):** Comprueba automáticamente las nuevas versiones publicadas en el repositorio de GitHub con diálogo de advertencia previo, descarga interactiva con medidor de velocidad y reinicio asistido.
 - 🔍 **Búsqueda y Detección de Actualizaciones:** Escaneo automático de programas desactualizados a través del catálogo de `winget`.
-- ⚡ **Actualizaciones Individuales o en Lote:** Actualiza aplicaciones específicas con un solo clic o todas a la vez.
-- 🗑️ **Desinstalador Limpio:** Detección de programas instalados con limpieza profunda de archivos temporales, carpetas residuales y registros.
-- 🎮 **Monitor de GPU y Drivers:** Detección automática del hardware gráfico (NVIDIA, AMD, Intel), estado de controladores, VRAM, temperatura y accesos directos al panel de control.
-- 🎨 **Interfaz Moderna:** Diseño oscuro, animaciones fluidas y notificaciones en tiempo real sobre el progreso de las operaciones.
+- ⚡ **Actualizaciones Individuales o en Lote:** Actualiza aplicaciones específicas con un solo clic o todas a la vez con cola de progreso en tiempo real.
+- 🛡️ **Desinstalador Limpio con Platform Shield:** Desinstalación profunda con limpieza de registros y archivos residuales. Incluye blindaje de seguridad inviolable para lanzadores de juegos (**Steam, Epic Games, Ubisoft Connect, EA App, Riot Games, Battle.net y GOG Galaxy**).
+- 🎮 **Monitor de GPU y Drivers:** Detección en tiempo real de GPU (NVIDIA, AMD, Intel), telemetría de VRAM, temperatura, consumo de energía y suites de controladores oficiales recomendadas.
+- 💾 **Gestión de Puntos de Restauración:** Creación de instantáneas del sistema antes de actualizar o desinstalar, con opción de purga y acceso directo al asistente nativo `rstrui.exe`.
+- 📦 **Exportar e Importar Paquetes:** Respalda tu lista de aplicaciones instaladas en formato JSON para restaurarlas en cualquier equipo en segundos.
+- 🎨 **Interfaz Windows 11 Glassmorphism:** Diseño ultra moderno con desenfoque de fondo, tema oscuro de alto contraste y animaciones fluidas aceleradas por hardware.
 
 ---
 
 ## 📋 Requisitos Previos
 
-- **Sistema Operativo:** Windows 10 (versión 1809 o superior) o Windows 11.
-- **WinGet:** Windows Package Manager instalado (incluido por defecto en Windows 11 y versiones recientes de Windows 10).
-- **Node.js:** Versión 18.x o superior recomendada ([Descargar Node.js](https://nodejs.org/)).
-- **Permisos de Administrador:** Necesarios para instalar y desinstalar aplicaciones del sistema.
+- **Sistema Operativo:** Windows 10 (versión 1809 o superior) o Windows 11 (64-bit).
+- **WinGet:** Windows Package Manager (la app incluye un activador automático en terminal si no está presente).
+- **Node.js:** Versión 18.x o superior recomendada (solo para desarrollo).
+- **Permisos de Administrador:** Necesarios para gestionar software y puntos de restauración a nivel de sistema.
 
 ---
 
@@ -40,51 +43,24 @@ Panel de control moderno e intuitivo para Windows diseñado para gestionar, actu
    ```bash
    npm start
    ```
-   o con la flag de desarrollo:
+   o con DevTools habilitadas:
    ```bash
    npm run dev
    ```
 
 ---
 
-## 📦 Compilación y Creación del Instalador de Windows
+## 📦 Compilación de Ejecutables
 
-Puedes generar tanto un **instalador tradicional de Windows (`.exe` Setup con asistente)** como una **versión portable**:
+Para generar los instaladores listos para producción:
 
-1. **Crear el instalador de Windows (Setup `.exe`):**
-   ```bash
-   npm run build:installer
-   ```
-   *Crea un instalador interactivo (`dist/WinGet Manager Setup 1.0.0.exe`) con selección de carpeta, acceso directo en el Escritorio, integración en el Menú Inicio y desinstalador automático en Windows.*
-
-2. **Crear la versión portable (sin instalación):**
-   ```bash
-   npm run build:portable
-   ```
-
-3. **Compilar ambos a la vez:**
-   ```bash
-   npm run build
-   ```
-
-Los ejecutables generados se guardarán en la carpeta `dist/`.
-
----
-
-## 📁 Estructura del Proyecto
-
-```text
-Win-Get-Manager/
-├── index.html          # Estructura de la interfaz de usuario
-├── styles.css          # Estilos visuales y diseño responsive/dark
-├── renderer.js         # Lógica del frontend y renderizado de la UI
-├── preload.js          # Puente seguro entre Electron y la interfaz (ContextBridge)
-├── main.js             # Proceso principal de Electron, integración con PowerShell y WinGet
-├── package.json        # Configuración de dependencias y scripts de compilación
-├── package-lock.json   # Árbol de dependencias bloqueado
-├── .gitignore          # Reglas de exclusión para Git (node_modules, dist, logs)
-└── README.md           # Documentación del proyecto
+```bash
+npm run build
 ```
+
+Los ejecutables generados se ubican en la carpeta `dist/`:
+- `WinGet Manager Setup 1.0.2.exe`: Instalador guiado para Windows con accesos directos y configuración automática.
+- `WinGet Manager 1.0.2.exe`: Versión portable sin instalación.
 
 ---
 

@@ -20,14 +20,11 @@
   <div id="titlebar" class="titlebar">
     <div class="titlebar-drag-region"></div>
     <div class="titlebar-left">
-      <div class="app-logo">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-        </svg>
+      <div class="app-logo" title="WinGet Manager">
+        <img src="logo.png" alt="WinGet Manager" class="app-logo-img" width="24" height="24" draggable="false" />
       </div>
       <span class="titlebar-title">WinGet Manager</span>
+      <span id="titlebar-app-version" class="app-version-badge" title="Versión instalada: v1.0.2. Clic para comprobar si hay actualizaciones en GitHub">v1.0.2</span>
     </div>
     <div class="titlebar-controls">
       <button id="btn-minimize" class="titlebar-btn btn-minimize" title="Minimizar" aria-label="Minimizar">
@@ -50,8 +47,17 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1 class="sidebar-title">WinGet Manager</h1>
-        <p class="sidebar-subtitle">Panel de control y limpieza</p>
+        <div class="sidebar-header-row">
+          <div>
+            <h1 class="sidebar-title">WinGet Manager</h1>
+            <p class="sidebar-subtitle">Panel de control y limpieza</p>
+          </div>
+          <button id="btn-check-app-update" class="btn-check-update-icon" title="Comprobar si hay una nueva versión de WinGet Manager en tu repositorio" aria-label="Comprobar actualizaciones">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Navigation Menu -->
@@ -67,6 +73,13 @@
         <button id="nav-gpu" class="nav-nav-btn" aria-label="Ir a Gráficos y Panel de Control">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><circle cx="7.5" cy="10.5" r="2.5"/><circle cx="16.5" cy="10.5" r="2.5"/><path d="M5 17v3M8 17v3M11 17v3M16 17v3M19 17v3"/></svg>
           <span>Gráficos & Control</span>
+        </button>
+        <button id="nav-restore" class="nav-nav-btn" aria-label="Ir a Puntos de Restauración">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <polyline points="9 12 11 14 15 10"/>
+          </svg>
+          <span>Puntos de Restauración</span>
         </button>
       </div>
 
@@ -142,6 +155,28 @@
             <span>Desinstalar Seleccionadas (<span id="installed-selected-count">0</span>)</span>
           </button>
         </div>
+
+        <!-- Restore Point Fluent Toggle Card -->
+        <label for="chk-create-restore-point" class="restore-point-toggle-card glass" id="restore-point-card" title="Activar para crear un Punto de Restauración del Sistema en Windows antes de desinstalar">
+          <div class="toggle-card-left">
+            <div class="toggle-card-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <polyline points="9 12 11 14 15 10"/>
+              </svg>
+            </div>
+            <div class="toggle-card-text">
+              <span class="toggle-card-title">Punto de Restauración</span>
+              <span class="toggle-card-desc">Copia del SO (Ocupa disco)</span>
+            </div>
+          </div>
+          <div class="toggle-switch-wrapper">
+            <input type="checkbox" id="chk-create-restore-point" class="toggle-checkbox" />
+            <span class="toggle-switch-track">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </div>
+        </label>
       </div>
 
       <!-- GPU Controls Wrapper -->
@@ -166,6 +201,37 @@
           </button>
         </div>
       </div>
+
+      <!-- Restore Controls Wrapper -->
+      <div id="sidebar-restore-controls" class="sidebar-section-controls hidden">
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card glass">
+            <span id="stat-restore-total" class="stat-number">—</span>
+            <span class="stat-label">Puntos Creados</span>
+          </div>
+          <div class="stat-card glass">
+            <span id="stat-restore-status" class="stat-number" style="font-size: 13px;">—</span>
+            <span class="stat-label">Protección SO</span>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          <button id="btn-scan-restore" class="btn btn-primary" aria-label="Actualizar lista de puntos de restauración">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <span>Actualizar Lista</span>
+          </button>
+          <button id="btn-create-restore-sidebar" class="btn btn-accent" aria-label="Crear nuevo punto de restauración">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            <span>Crear Punto Ahora</span>
+          </button>
+          <button id="btn-open-rstrui" class="btn btn-ghost" title="Abre el asistente oficial de restauración de Windows (rstrui.exe)" aria-label="Abrir asistente de recuperación de Windows">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <span>Asistente de Windows</span>
+          </button>
+        </div>
+      </div>
     </aside>
 
     <!-- Main Content -->
@@ -175,10 +241,90 @@
       <div id="main-updates-view" class="main-view-wrapper">
         <!-- Top Bar -->
         <div class="topbar">
-          <div class="search-wrapper">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            <input id="search-input" type="text" class="search-input" placeholder="Filtrar aplicaciones..." aria-label="Buscar aplicación" />
+          <div class="topbar-left">
+            <div class="search-wrapper">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input id="search-input" type="text" class="search-input" placeholder="Filtrar aplicaciones... (Ctrl+F)" aria-label="Buscar aplicación" />
+            </div>
+
+            <!-- Controls: Sort Custom Dropdown -->
+            <div class="filters-container">
+              <div class="custom-dropdown" id="dropdown-sort-packages" title="Ordenar lista de aplicaciones">
+                <button type="button" class="custom-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="custom-dropdown-trigger-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
+                  </span>
+                  <span class="custom-dropdown-label">Nombre (A - Z)</span>
+                  <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="custom-dropdown-menu" role="listbox">
+                  <div class="custom-dropdown-group-title">ORDENAR POR</div>
+                  <div class="custom-dropdown-item selected" data-value="name-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
+                      <span>Nombre (A - Z)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="name-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8 4-4 4 4M7 4v16M21 16l-4 4-4-4M17 20V4"/></svg>
+                      <span>Nombre (Z - A)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-divider"></div>
+                  <div class="custom-dropdown-item" data-value="creator-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      <span>Creador (A - Z)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="creator-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      <span>Creador (Z - A)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-divider"></div>
+                  <div class="custom-dropdown-item" data-value="size-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                      <span>Tamaño (Mayor primero)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="size-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                      <span>Tamaño (Menor primero)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-divider"></div>
+                  <div class="custom-dropdown-item" data-value="id-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                      <span>ID del Paquete (A - Z)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </div>
+                <select id="sort-packages-select" class="visually-hidden" aria-hidden="true" tabindex="-1">
+                  <option value="name-asc" selected>Nombre (A - Z)</option>
+                  <option value="name-desc">Nombre (Z - A)</option>
+                  <option value="creator-asc">Creador (A - Z)</option>
+                  <option value="creator-desc">Creador (Z - A)</option>
+                  <option value="size-desc">Tamaño (Mayor primero)</option>
+                  <option value="size-asc">Tamaño (Menor primero)</option>
+                  <option value="id-asc">ID (A - Z)</option>
+                </select>
+              </div>
+            </div>
           </div>
+
           <div class="topbar-actions">
             <button id="btn-select-all" class="btn btn-ghost btn-sm" aria-label="Seleccionar todo">Seleccionar todo</button>
             <button id="btn-deselect-all" class="btn btn-ghost btn-sm" aria-label="Deseleccionar todo">Deseleccionar</button>
@@ -236,11 +382,26 @@
                   <th class="col-check">
                     <input type="checkbox" id="chk-all-header" class="custom-checkbox" aria-label="Seleccionar todos" />
                   </th>
-                  <th class="col-name">Aplicación</th>
-                  <th class="col-id">ID del Paquete</th>
-                  <th class="col-version">Versión Actual</th>
-                  <th class="col-available">Disponible</th>
-                  <th class="col-source">Fuente</th>
+                  <th class="col-name th-sortable" data-sort="name" title="Clic para ordenar por Nombre">
+                    <span>Aplicación</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-id th-sortable" data-sort="id" title="Clic para ordenar por ID">
+                    <span>ID del Paquete</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-version th-sortable" data-sort="version" title="Clic para ordenar por Versión">
+                    <span>Versión Actual</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-available th-sortable" data-sort="available" title="Clic para ordenar por Versión Disponible">
+                    <span>Disponible</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-size th-sortable" data-sort="size" title="Clic para ordenar por Tamaño">
+                    <span>Tamaño</span>
+                    <span class="sort-indicator"></span>
+                  </th>
                 </tr>
               </thead>
               <tbody id="package-tbody">
@@ -255,13 +416,88 @@
       <div id="main-uninstaller-view" class="main-view-wrapper hidden">
         <!-- Top Bar -->
         <div class="topbar">
-          <div class="search-wrapper">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            <input id="search-installed-input" type="text" class="search-input" placeholder="Buscar aplicaciones instaladas..." aria-label="Buscar aplicación instalada" />
+          <div class="topbar-left">
+            <div class="search-wrapper">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input id="search-installed-input" type="text" class="search-input" placeholder="Buscar aplicaciones instaladas... (Ctrl+F)" aria-label="Buscar aplicación instalada" />
+            </div>
+
+            <!-- Controls: Sort for Uninstaller Custom Dropdown -->
+            <div class="filters-container">
+              <div class="custom-dropdown" id="dropdown-sort-installed" title="Ordenar aplicaciones instaladas">
+                <button type="button" class="custom-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="custom-dropdown-trigger-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
+                  </span>
+                  <span class="custom-dropdown-label">Nombre (A - Z)</span>
+                  <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="custom-dropdown-menu" role="listbox">
+                  <div class="custom-dropdown-group-title">ORDENAR POR</div>
+                  <div class="custom-dropdown-item selected" data-value="name-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
+                      <span>Nombre (A - Z)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="name-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8 4-4 4 4M7 4v16M21 16l-4 4-4-4M17 20V4"/></svg>
+                      <span>Nombre (Z - A)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-divider"></div>
+                  <div class="custom-dropdown-item" data-value="creator-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      <span>Editor (A - Z)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="creator-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      <span>Editor (Z - A)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-divider"></div>
+                  <div class="custom-dropdown-item" data-value="size-desc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                      <span>Tamaño (Mayor primero)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div class="custom-dropdown-item" data-value="size-asc" role="option">
+                    <div class="custom-dropdown-item-left">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                      <span>Tamaño (Menor primero)</span>
+                    </div>
+                    <svg class="custom-dropdown-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </div>
+                <select id="sort-installed-select" class="visually-hidden" aria-hidden="true" tabindex="-1">
+                  <option value="name-asc" selected>Nombre (A - Z)</option>
+                  <option value="name-desc">Nombre (Z - A)</option>
+                  <option value="creator-asc">Editor (A - Z)</option>
+                  <option value="creator-desc">Editor (Z - A)</option>
+                  <option value="size-desc">Tamaño (Mayor primero)</option>
+                  <option value="size-asc">Tamaño (Menor primero)</option>
+                </select>
+              </div>
+            </div>
           </div>
+
           <div class="topbar-actions">
             <button id="btn-select-all-installed" class="btn btn-ghost btn-sm" aria-label="Seleccionar todo">Seleccionar todo</button>
             <button id="btn-deselect-all-installed" class="btn btn-ghost btn-sm" aria-label="Deseleccionar todo">Deseleccionar</button>
+            <button id="btn-uninstall-selected-top" class="btn btn-danger btn-sm" disabled aria-label="Desinstalar seleccionadas">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
+              <span>Desinstalar (<span id="installed-selected-count-top">0</span>)</span>
+            </button>
           </div>
         </div>
 
@@ -316,11 +552,22 @@
                   <th class="col-check">
                     <input type="checkbox" id="chk-all-installed-header" class="custom-checkbox" aria-label="Seleccionar todas las aplicaciones instaladas" />
                   </th>
-                  <th class="col-name">Aplicación</th>
-                  <th class="col-publisher">Editor</th>
-                  <th class="col-version">Versión</th>
-                  <th class="col-size">Tamaño</th>
-                  <th class="col-action">Acción</th>
+                  <th class="col-name th-sortable" data-sort-installed="name" title="Clic para ordenar por Nombre">
+                    <span>Aplicación</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-publisher th-sortable" data-sort-installed="publisher" title="Clic para ordenar por Editor">
+                    <span>Editor</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-version th-sortable" data-sort-installed="version" title="Clic para ordenar por Versión">
+                    <span>Versión</span>
+                    <span class="sort-indicator"></span>
+                  </th>
+                  <th class="col-size th-sortable" data-sort-installed="size" title="Clic para ordenar por Tamaño">
+                    <span>Tamaño</span>
+                    <span class="sort-indicator"></span>
+                  </th>
                 </tr>
               </thead>
               <tbody id="installed-apps-tbody">
@@ -368,14 +615,14 @@
                   </div>
                   <div class="gpu-hero-names">
                     <div class="gpu-hero-tag-row">
-                      <span id="gpu-detail-vendor-tag" class="gpu-vendor-tag">NVIDIA GeForce RTX</span>
+                      <span id="gpu-detail-vendor-tag" class="gpu-vendor-tag">Adaptador Gráfico</span>
                       <span id="gpu-detail-status-pill" class="gpu-status-badge badge-uptodate">
                         <span class="status-pulse-dot"></span>
-                        Controlador Al Día
+                        Estado del Controlador
                       </span>
                     </div>
-                    <h2 id="gpu-detail-name" class="gpu-main-name">NVIDIA GeForce RTX 5070 Ti</h2>
-                    <span id="gpu-detail-arch" class="gpu-arch-label">Arquitectura Dedicada • Controladores Oficiales Activos</span>
+                    <h2 id="gpu-detail-name" class="gpu-main-name">Detectando adaptador de vídeo...</h2>
+                    <span id="gpu-detail-arch" class="gpu-arch-label">Consultando arquitectura y controladores...</span>
                   </div>
                 </div>
                 <div class="gpu-hero-actions">
@@ -398,10 +645,10 @@
                 <div class="gpu-driver-status-info">
                   <div class="gpu-driver-version-row">
                     <span class="gpu-driver-title">Versión del Controlador:</span>
-                    <span id="gpu-driver-ver-badge" class="gpu-driver-ver-badge">v610.88 Game Ready (WHQL)</span>
-                    <span id="gpu-driver-date" class="gpu-driver-date">Publicado: 22/07/2026</span>
+                    <span id="gpu-driver-ver-badge" class="gpu-driver-ver-badge">Detectando versión...</span>
+                    <span id="gpu-driver-date" class="gpu-driver-date">Comprobando fecha...</span>
                   </div>
-                  <p id="gpu-driver-status-subtext" class="gpu-driver-status-subtext">Tu tarjeta gráfica dispone de los controladores oficiales más recientes y compatibles con aceleración de trazado de rayos, DLSS/FSR y DirectX 12 Ultimate.</p>
+                  <p id="gpu-driver-status-subtext" class="gpu-driver-status-subtext">Consultando información oficial de controladores en el sistema...</p>
                 </div>
               </div>
             </div>
@@ -410,7 +657,7 @@
             <div class="gpu-metrics-header-wrap">
               <div class="gpu-metrics-title">
                 <h3>Métricas de Rendimiento y Hardware</h3>
-                <span class="gpu-metrics-sub">Monitorización en tiempo real del subsistema de vídeo</span>
+                <span class="gpu-metrics-sub">Monitorización del subsistema de vídeo</span>
               </div>
             </div>
 
@@ -424,14 +671,14 @@
                   </div>
                 </div>
                 <div class="metric-tile-main">
-                  <span id="metric-vram-total" class="metric-tile-value">16.0 GB</span>
+                  <span id="metric-vram-total" class="metric-tile-value">—</span>
                   <span class="metric-tile-unit">Dedicada</span>
                 </div>
                 <div class="metric-progress-wrap">
-                  <div id="metric-vram-bar" class="metric-progress-bar" style="width: 10%;"></div>
+                  <div id="metric-vram-bar" class="metric-progress-bar" style="width: 0%;"></div>
                 </div>
                 <div class="metric-tile-footer">
-                  <span id="metric-vram-used" class="metric-footer-text">1.6 GB en uso</span>
+                  <span id="metric-vram-used" class="metric-footer-text">Calculando...</span>
                   <span class="metric-status-pill pill-good">Disponible</span>
                 </div>
               </div>
@@ -445,15 +692,15 @@
                   </div>
                 </div>
                 <div class="metric-tile-main">
-                  <span id="metric-temp-val" class="metric-tile-value">49 °C</span>
+                  <span id="metric-temp-val" class="metric-tile-value">—</span>
                   <span class="metric-tile-unit">Núcleo</span>
                 </div>
                 <div class="metric-progress-wrap">
-                  <div id="metric-temp-bar" class="metric-progress-bar bar-temp" style="width: 45%;"></div>
+                  <div id="metric-temp-bar" class="metric-progress-bar bar-temp" style="width: 0%;"></div>
                 </div>
                 <div class="metric-tile-footer">
                   <span class="metric-footer-text">Límite térmico: 88 °C</span>
-                  <span id="metric-temp-pill" class="metric-status-pill pill-cool">Fresca</span>
+                  <span id="metric-temp-pill" class="metric-status-pill pill-cool">—</span>
                 </div>
               </div>
 
@@ -466,15 +713,15 @@
                   </div>
                 </div>
                 <div class="metric-tile-main">
-                  <span id="metric-power-val" class="metric-tile-value">39 W</span>
-                  <span id="metric-power-limit" class="metric-tile-unit">/ 300 W TGP</span>
+                  <span id="metric-power-val" class="metric-tile-value">—</span>
+                  <span id="metric-power-limit" class="metric-tile-unit">—</span>
                 </div>
                 <div class="metric-progress-wrap">
-                  <div id="metric-power-bar" class="metric-progress-bar bar-power" style="width: 13%;"></div>
+                  <div id="metric-power-bar" class="metric-progress-bar bar-power" style="width: 0%;"></div>
                 </div>
                 <div class="metric-tile-footer">
-                  <span class="metric-footer-text">Modo reposo / 2D</span>
-                  <span class="metric-status-pill pill-good">Eficiente</span>
+                  <span class="metric-footer-text">Telemetría de alimentación</span>
+                  <span class="metric-status-pill pill-good">—</span>
                 </div>
               </div>
 
@@ -487,15 +734,15 @@
                   </div>
                 </div>
                 <div class="metric-tile-main">
-                  <span id="metric-util-val" class="metric-tile-value">5 %</span>
+                  <span id="metric-util-val" class="metric-tile-value">—</span>
                   <span class="metric-tile-unit">Uso</span>
                 </div>
                 <div class="metric-progress-wrap">
-                  <div id="metric-util-bar" class="metric-progress-bar bar-util" style="width: 5%;"></div>
+                  <div id="metric-util-bar" class="metric-progress-bar bar-util" style="width: 0%;"></div>
                 </div>
                 <div class="metric-tile-footer">
                   <span class="metric-footer-text">Aceleración activa</span>
-                  <span class="metric-status-pill pill-cool">Mínima carga</span>
+                  <span class="metric-status-pill pill-cool">—</span>
                 </div>
               </div>
 
@@ -508,16 +755,17 @@
                   </div>
                 </div>
                 <div class="metric-tile-main">
-                  <span id="metric-display-res" class="metric-tile-value">1920 × 1080</span>
-                  <span id="metric-display-hz" class="metric-tile-unit">@ 144 Hz</span>
+                  <span id="metric-display-res" class="metric-tile-value">—</span>
+                  <span id="metric-display-hz" class="metric-tile-unit">—</span>
                 </div>
                 <div class="metric-progress-wrap">
                   <div class="metric-progress-bar bar-display" style="width: 100%;"></div>
                 </div>
                 <div class="metric-tile-footer">
-                  <span class="metric-footer-text">Tasa de refresco alta</span>
-                  <span class="metric-status-pill pill-good">Fluido</span>
+                  <span class="metric-footer-text">Salida de vídeo principal</span>
+                  <span class="metric-status-pill pill-good">Activo</span>
                 </div>
+              </div>
               </div>
 
               <!-- Metric 6: Control Software Status -->
@@ -626,6 +874,111 @@
             </div>
           </div>
         </div>
+
+      <!-- System Restore View -->
+      <div id="main-restore-view" class="main-view-wrapper hidden">
+        <!-- Top Bar -->
+        <div class="topbar">
+          <div class="topbar-left">
+            <div class="search-wrapper">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input id="search-restore-input" type="text" class="search-input" placeholder="Buscar por nombre, tipo o fecha... (Ctrl+F)" aria-label="Buscar punto de restauración" />
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <button id="btn-create-restore-topbar" class="btn btn-accent btn-sm" aria-label="Crear Punto de Restauración">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              <span>Crear Punto</span>
+            </button>
+            <button id="btn-open-rstrui-topbar" class="btn btn-ghost btn-sm" title="Abrir Asistente de Recuperación de Windows (rstrui.exe)" aria-label="Asistente Windows">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              <span>Restaurar Sistema</span>
+            </button>
+            <button id="btn-delete-all-restore" class="btn btn-ghost btn-sm btn-danger-ghost" title="Eliminar todos los puntos de restauración para liberar espacio en disco" aria-label="Eliminar todos">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              <span>Eliminar Todos</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Restore Content Section -->
+        <div class="package-section">
+          <!-- Status Banner Card -->
+          <div class="restore-hero-card glass">
+            <div class="restore-hero-left">
+              <div class="restore-shield-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+              </div>
+              <div class="restore-hero-info">
+                <div class="restore-hero-title-row">
+                  <h3 class="restore-hero-title">Protección del Sistema de Windows</h3>
+                  <span id="restore-hero-badge" class="badge-status-pill badge-active">Activo</span>
+                </div>
+                <p class="restore-hero-desc">Permite revertir el equipo a un estado anterior si una actualización o cambio de controladores causa problemas. Puedes crear instantáneas manuales o restaurar el equipo en cualquier momento.</p>
+              </div>
+            </div>
+            <div class="restore-hero-actions">
+              <button id="btn-open-protection-settings" class="btn btn-ghost btn-sm" title="Abrir Configuración de Protección del Sistema en Windows">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>Configurar Disco</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty / Loading / Admin States -->
+          <div id="state-restore-idle" class="empty-state">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <h2 class="empty-state-title">Puntos de Restauración del Sistema</h2>
+            <p class="empty-state-desc">Haz clic en <strong>Actualizar Lista</strong> para cargar la lista de instantáneas de recuperación guardadas en Windows.</p>
+          </div>
+
+          <div id="state-restore-loading" class="empty-state hidden">
+            <div class="spinner"></div>
+            <h2 class="empty-state-title">Consultando instantáneas del sistema...</h2>
+            <p class="empty-state-desc">Obteniendo los puntos de restauración registrados en Windows.</p>
+          </div>
+
+          <div id="state-restore-admin" class="empty-state hidden">
+            <div class="empty-state-icon" style="color: #f59e0b;">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <h2 class="empty-state-title">Permisos de Administrador Requeridos</h2>
+            <p class="empty-state-desc">Windows exige permisos de Administrador para listar y gestionar las instantáneas de recuperación.</p>
+            <button id="btn-request-admin-restore" class="btn btn-primary" style="margin-top: 12px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Cargar con Permisos de Administrador (UAC)</span>
+            </button>
+          </div>
+
+          <div id="state-restore-empty" class="empty-state hidden">
+            <div class="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            </div>
+            <h2 class="empty-state-title">No hay puntos de restauración</h2>
+            <p class="empty-state-desc">No se encontraron instantáneas de restauración en el equipo. Puedes crear una ahora mismo.</p>
+          </div>
+
+          <!-- Table of Restore Points -->
+          <div id="restore-table-wrapper" class="package-table-wrapper hidden">
+            <table class="package-table" aria-label="Lista de puntos de restauración">
+              <thead>
+                <tr>
+                  <th class="col-restore-num"># ID</th>
+                  <th class="col-name">Descripción del Punto</th>
+                  <th class="col-restore-date">Fecha y Hora</th>
+                  <th class="col-restore-type">Tipo</th>
+                  <th class="col-restore-action">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="restore-tbody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- ══════════════════════════════════════════════════════════════
@@ -710,6 +1063,145 @@
       <div class="modal-footer">
         <button id="btn-modal-cancel" class="btn btn-ghost">Cancelar</button>
         <button id="btn-modal-confirm" class="btn btn-danger">Confirmar y Actualizar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Restore Point Modal -->
+  <div id="modal-create-restore" class="modal-overlay hidden">
+    <div class="modal-card glass" style="max-width: 480px;">
+      <div class="modal-header">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: #6366f1;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+        <span class="modal-title">Crear Punto de Restauración</span>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom: 12px; font-size: 13px; color: var(--color-text-secondary, #94a3b8); line-height: 1.5;">
+          Introduce una descripción para identificar este punto en el futuro (ej. Antes de actualizar controladores):
+        </p>
+        <div class="search-wrapper" style="width: 100%; max-width: 100%; margin: 0;">
+          <input id="input-restore-desc" type="text" class="search-input" style="width: 100%; border-radius: 8px; padding: 10px 14px; font-size: 13px;" placeholder="Ej: WinGet Manager - Instalación manual" maxlength="80" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-modal-restore-cancel" class="btn btn-ghost">Cancelar</button>
+        <button id="btn-modal-restore-confirm" class="btn btn-accent">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          <span>Crear Punto</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       App Self-Update Modal Dialog
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="app-update-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
+    <div class="modal-card glass app-update-card">
+      <div class="modal-header">
+        <div class="app-update-header-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+        </div>
+        <div class="modal-header-text">
+          <span id="app-update-title" class="modal-title">Actualización de WinGet Manager</span>
+          <span id="app-update-subtitle" class="modal-subtitle">Nueva versión oficial detectada en el repositorio</span>
+        </div>
+        <button id="btn-close-update-modal" class="modal-close-btn" aria-label="Cerrar modal">&times;</button>
+      </div>
+
+      <div class="modal-body app-update-body">
+        <!-- View A: Details & Warning Prompt -->
+        <div id="app-update-view-prompt" class="app-update-view">
+          <div class="app-update-banner">
+            <div class="app-update-versions">
+              <div class="ver-pill current">
+                <span class="ver-label">Versión Actual</span>
+                <span id="app-update-cur-ver" class="ver-tag">v1.0.2</span>
+              </div>
+              <div class="ver-arrow">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </div>
+              <div class="ver-pill latest">
+                <span class="ver-label">Nueva Versión</span>
+                <span id="app-update-new-ver" class="ver-tag">v1.0.3</span>
+              </div>
+            </div>
+            <div id="app-update-date" class="app-update-date">Disponible en GitHub</div>
+          </div>
+
+          <div class="app-update-warning-box">
+            <div class="warning-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            </div>
+            <div>
+              <strong style="color: #fbbf24;">Aviso de actualización automática:</strong>
+              <p>El paquete de instalación oficial será descargado desde tu repositorio de GitHub (<code>joselyky/Win-Get-Manager</code>). Antes de reemplazar los archivos, se te pedirá una confirmación final.</p>
+            </div>
+          </div>
+
+          <div class="app-update-notes-wrapper">
+            <span class="notes-heading">Novedades y notas de la versión:</span>
+            <div id="app-update-notes" class="app-update-notes">
+              <!-- Rendered release notes -->
+            </div>
+          </div>
+        </div>
+
+        <!-- View B: Downloading Progress -->
+        <div id="app-update-view-progress" class="app-update-view hidden">
+          <div class="app-update-download-box">
+            <div class="download-spin-icon">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin-animation">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+            </div>
+            <h4 id="download-status-heading">Descargando actualización oficial...</h4>
+            <p id="download-asset-name" class="download-subtext">WinGet-Manager-Setup.exe</p>
+
+            <div class="download-progress-bar-wrap">
+              <div id="download-progress-fill" class="download-progress-fill" style="width: 0%;"></div>
+            </div>
+
+            <div class="download-stats-row">
+              <span id="download-pct-text">0%</span>
+              <span id="download-mb-text">0.0 MB / 0.0 MB</span>
+              <span id="download-speed-text">0.0 MB/s</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- View C: Ready to Install & Restart Prompt -->
+        <div id="app-update-view-ready" class="app-update-view hidden">
+          <div class="app-update-ready-box">
+            <div class="ready-check-icon">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" stroke="#34d399"/>
+                <polyline points="8 12 11 15 16 9" stroke="#34d399"/>
+              </svg>
+            </div>
+            <h4>¡Descarga completada con éxito!</h4>
+            <div class="ready-warning-alert">
+              <p><strong>Advertencia importante:</strong> Para aplicar la actualización, <strong>WinGet Manager se cerrará de forma segura</strong> e iniciará el instalador automáticamente para actualizar los archivos. ¿Deseas proceder ahora?</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer app-update-footer">
+        <button id="btn-update-cancel" class="btn btn-ghost">Recordar más tarde</button>
+        <button id="btn-update-start" class="btn btn-accent">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          <span>Descargar e Instalar Ahora</span>
+        </button>
+        <button id="btn-update-install-now" class="btn btn-success hidden">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
+          <span>Cerrar e Instalar Actualización</span>
+        </button>
       </div>
     </div>
   </div>

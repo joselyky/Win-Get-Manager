@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   upgradePackages:          (ids) => ipcRenderer.send('winget:upgrade-packages', ids),
   upgradeAll:               ()    => ipcRenderer.send('winget:upgrade-all'),
   enableWinGetInTerminal:   ()    => ipcRenderer.invoke('winget:enable-in-terminal'),
+  exportPackages:           ()    => ipcRenderer.invoke('winget:export-packages'),
+  importPackages:           ()    => ipcRenderer.invoke('winget:import-packages'),
 
   // WinGet live output listeners
   onLog:         (cb) => ipcRenderer.on('winget:log',          (_e, data) => cb(data)),
@@ -45,4 +47,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Error recovery APIs
   killProcess: (nameOrId) => ipcRenderer.invoke('apps:kill-process', nameOrId),
   upgradePackageElevated: (pkg) => ipcRenderer.send('winget:upgrade-package-elevated', pkg),
+
+  // System Restore Points APIs
+  listRestorePoints: (opts) => ipcRenderer.invoke('restore:list', opts),
+  createRestorePoint: (desc) => ipcRenderer.invoke('restore:create', desc),
+  deleteRestorePoint: (sequenceNumber) => ipcRenderer.invoke('restore:delete', sequenceNumber),
+  deleteAllRestorePoints: () => ipcRenderer.invoke('restore:delete-all'),
+  openSystemRestoreWizard: () => ipcRenderer.invoke('restore:open-wizard'),
+  openSystemRestoreSettings: () => ipcRenderer.invoke('restore:open-settings'),
+  enableSystemRestore: () => ipcRenderer.invoke('restore:enable'),
+
+  // App Self-Updater APIs
+  checkForAppUpdates: (opts) => ipcRenderer.invoke('app:check-for-updates', opts),
+  downloadAppUpdate: (data) => ipcRenderer.invoke('app:download-update', data),
+  installAppUpdate: (filePath) => ipcRenderer.invoke('app:install-update', filePath),
+  onAppUpdateAvailable: (cb) => ipcRenderer.on('app:update-available', (_e, data) => cb(data)),
+  onAppUpdateDownloadProgress: (cb) => ipcRenderer.on('app:update-download-progress', (_e, data) => cb(data)),
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 });

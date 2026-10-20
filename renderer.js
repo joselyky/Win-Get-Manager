@@ -77,6 +77,11 @@ let sessionCompletedPkgIds = new Set();
 
 let allInstalledApps = [];   // List of installed apps
 let filteredInstalledApps = []; // Subset after search filter
+let currentMainView = 'updates'; // Active view: 'updates' | 'uninstaller' | 'gpu' | 'restore'
+
+let allRestorePoints = [];
+let filteredRestorePoints = [];
+let restoreDataLoaded = false;
 
 // ─── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
@@ -88,7 +93,10 @@ async function init() {
   bindNavigation();
   bindUninstallerControls();
   bindGpuControls();
+  bindRestoreControls();
   bindQueueEvents();
+  bindKeyboardShortcuts();
+  initAppUpdater();
   await loadSystemInfo();
 }
 
@@ -110,6 +118,125 @@ function bindActionButtons() {
   if (btnSelectAll) btnSelectAll.addEventListener('click', () => setAllCheckboxes(true));
   if (btnDeselectAll) btnDeselectAll.addEventListener('click', () => setAllCheckboxes(false));
   if (chkAllHeader) chkAllHeader.addEventListener('change', () => setAllCheckboxes(chkAllHeader.checked));
+
+  const btnExport = document.getElementById('btn-export-packages');
+  if (btnExport) btnExport.addEventListener('click', handleExportPackages);
+
+  const btnImport = document.getElementById('btn-import-packages');
+  if (btnImport) btnImport.addEventListener('click', handleImportPackages);
+}
+
+// ─── Export & Import WinGet Packages ───────────────────────────────────────────
+async function handleExportPackages() {
+  if (isUpdating) return;
+  setStatusBar('Exportando software...', 'Generando archivo de paquetes JSON con WinGet...', null, 'busy');
+  try {
+    const res = await window.electronAPI.exportPackages();
+    if (res.canceled) {
+      resetStatusBar();
+      return;
+    }
+    if (res.success) {
+      showToast('Lista exportada con éxito.', 'success');
+      setStatusBar('Exportación completada', `Archivo guardado en: ${res.filePath}`, 100, 'idle');
+    } else {
+      showToast(`Error al exportar: ${res.error || 'Código ' + res.code}`, 'error');
+      setStatusBar('Error al exportar', res.error || 'Fallo de WinGet', 0, 'error');
+    }
+  } catch (err) {
+    showToast(`Error inesperado: ${err.message}`, 'error');
+  }
+}
+
+async function handleImportPackages() {
+  if (isUpdating) return;
+  try {
+    setStatusBar('Importando software...', 'Selecciona un archivo JSON de WinGet para restaurar aplicaciones...', null, 'busy');
+    const res = await window.electronAPI.importPackages();
+    if (res.canceled) {
+      resetStatusBar();
+      return;
+    }
+    if (res.success) {
+      showToast('Importación e instalación completada.', 'success');
+      setStatusBar('Importación completada', `Paquetes instalados desde: ${res.filePath}`, 100, 'idle');
+      handleScan(true);
+    } else {
+      showToast(`Error al importar: ${res.error || 'Código ' + res.code}`, 'error');
+      setStatusBar('Error al importar', res.error || 'Fallo de WinGet', 0, 'error');
+    }
+  } catch (err) {
+    showToast(`Error inesperado: ${err.message}`, 'error');
+  }
+}
+
+// ─── Keyboard Shortcuts ────────────────────────────────────────────────────────
+function bindKeyboardShortcuts() {
+  window.addEventListener('keydown', (e) => {
+    // 1. Ctrl + F -> Enfocar búsqueda según vista activa
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      if (currentMainView === 'updates') {
+        const inp = document.getElementById('search-input');
+        if (inp) { inp.focus(); inp.select(); }
+      } else if (currentMainView === 'uninstaller') {
+        const inp = document.getElementById('search-installed-input');
+        if (inp) { inp.focus(); inp.select(); }
+      } else if (currentMainView === 'restore') {
+        const inp = document.getElementById('search-restore-input');
+        if (inp) { inp.focus(); inp.select(); }
+      }
+      return;
+    }
+
+    // 2. F5 o Ctrl + R -> Recargar / Re-escanear según la vista
+    if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r')) {
+      e.preventDefault();
+      if (isUpdating) return;
+      if (currentMainView === 'updates') {
+        handleScan(true);
+      } else if (currentMainView === 'uninstaller') {
+        handleScanInstalled();
+      } else if (currentMainView === 'gpu') {
+        handleDetectGpu();
+      } else if (currentMainView === 'restore') {
+        handleLoadRestorePoints(false);
+      }
+      return;
+    }
+
+    // 3. Escape -> Cerrar modal de advertencia o limpiar buscador
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('confirm-modal');
+      if (modal && !modal.classList.contains('hidden')) {
+        e.preventDefault();
+        closeModal();
+        return;
+      }
+      const restoreModal = document.getElementById('modal-create-restore');
+      if (restoreModal && !restoreModal.classList.contains('hidden')) {
+        e.preventDefault();
+        restoreModal.classList.add('hidden');
+        return;
+      }
+      const updateModal = document.getElementById('app-update-modal');
+      if (updateModal && !updateModal.classList.contains('hidden')) {
+        e.preventDefault();
+        closeAppUpdateModal();
+        return;
+      }
+      const activeInput = document.activeElement;
+      if (activeInput && (activeInput.id === 'search-input' || activeInput.id === 'search-installed-input' || activeInput.id === 'search-restore-input')) {
+        if (activeInput.value) {
+          e.preventDefault();
+          activeInput.value = '';
+          activeInput.dispatchEvent(new Event('input'));
+        } else {
+          activeInput.blur();
+        }
+      }
+    }
+  });
 }
 
 // ─── Live Download & Update Queue ─────────────────────────────────────────────
@@ -393,31 +520,295 @@ function updateQueueUI(data) {
   }
 }
 
-// ─── Search Filter ─────────────────────────────────────────────────────────────
+// ─── Filter & Sort State ───────────────────────────────────────────────────────
+let currentSortPackage = 'name-asc';
+let currentSortInstalled = 'name-asc';
+
+function sortPackageList(list, sortKey) {
+  switch (sortKey) {
+    case 'name-asc':
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'name-desc':
+      list.sort((a, b) => (b.name || '').localeCompare(a.name || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'creator-asc':
+      list.sort((a, b) => (a.publisher || a.id || '').localeCompare(b.publisher || b.id || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'creator-desc':
+      list.sort((a, b) => (b.publisher || b.id || '').localeCompare(a.publisher || a.id || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'size-desc':
+      list.sort((a, b) => (Number(b.sizeMb) || 0) - (Number(a.sizeMb) || 0));
+      break;
+    case 'size-asc':
+      list.sort((a, b) => (Number(a.sizeMb) || 0) - (Number(b.sizeMb) || 0));
+      break;
+    case 'id-asc':
+      list.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'id-desc':
+      list.sort((a, b) => (b.id || '').localeCompare(a.id || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'version-asc':
+      list.sort((a, b) => (a.version || '').localeCompare(b.version || '', undefined, { numeric: true }));
+      break;
+    case 'version-desc':
+      list.sort((a, b) => (b.version || '').localeCompare(a.version || '', undefined, { numeric: true }));
+      break;
+    case 'available-asc':
+      list.sort((a, b) => (a.available || '').localeCompare(b.available || '', undefined, { numeric: true }));
+      break;
+    case 'available-desc':
+      list.sort((a, b) => (b.available || '').localeCompare(a.available || '', undefined, { numeric: true }));
+      break;
+    default:
+      break;
+  }
+}
+
+function sortInstalledList(list, sortKey) {
+  switch (sortKey) {
+    case 'name-asc':
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'name-desc':
+      list.sort((a, b) => (b.name || '').localeCompare(a.name || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'creator-asc':
+      list.sort((a, b) => (a.publisher || '').localeCompare(b.publisher || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'creator-desc':
+      list.sort((a, b) => (b.publisher || '').localeCompare(a.publisher || '', undefined, { sensitivity: 'base' }));
+      break;
+    case 'size-desc':
+      list.sort((a, b) => (Number(b.sizeMb) || 0) - (Number(a.sizeMb) || 0));
+      break;
+    case 'size-asc':
+      list.sort((a, b) => (Number(a.sizeMb) || 0) - (Number(b.sizeMb) || 0));
+      break;
+    case 'version-asc':
+      list.sort((a, b) => (a.version || '').localeCompare(b.version || '', undefined, { numeric: true }));
+      break;
+    case 'version-desc':
+      list.sort((a, b) => (b.version || '').localeCompare(a.version || '', undefined, { numeric: true }));
+      break;
+    default:
+      break;
+  }
+}
+
+function applyPackageFilters() {
+  const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+  const sortSelect = document.getElementById('sort-packages-select');
+  if (sortSelect) currentSortPackage = sortSelect.value;
+
+  filteredPackages = allPackages.filter(pkg => {
+    return !query ||
+      (pkg.name && pkg.name.toLowerCase().includes(query)) ||
+      (pkg.id && pkg.id.toLowerCase().includes(query)) ||
+      (pkg.publisher && pkg.publisher.toLowerCase().includes(query));
+  });
+
+  sortPackageList(filteredPackages, currentSortPackage);
+  renderPackageTable(filteredPackages);
+  updateStats();
+  updateTableSortIndicators();
+}
+
+function applyInstalledFilters() {
+  const searchInstalledInput = document.getElementById('search-installed-input');
+  const query = searchInstalledInput ? searchInstalledInput.value.trim().toLowerCase() : '';
+  const sortSelect = document.getElementById('sort-installed-select');
+  if (sortSelect) currentSortInstalled = sortSelect.value;
+
+  filteredInstalledApps = allInstalledApps.filter(app => {
+    return !query ||
+      (app.name && app.name.toLowerCase().includes(query)) ||
+      (app.publisher && app.publisher.toLowerCase().includes(query));
+  });
+
+  sortInstalledList(filteredInstalledApps, currentSortInstalled);
+  renderInstalledAppsTable(filteredInstalledApps);
+  updateInstalledTableSortIndicators();
+}
+
+function syncCustomDropdown(dropdownId, value) {
+  const dropdown = document.getElementById(dropdownId);
+  if (!dropdown) return;
+  const items = dropdown.querySelectorAll('.custom-dropdown-item');
+  const label = dropdown.querySelector('.custom-dropdown-label');
+
+  items.forEach(item => {
+    if (item.dataset.value === value) {
+      items.forEach(i => i.classList.remove('selected'));
+      item.classList.add('selected');
+      const textSpan = item.querySelector('.custom-dropdown-item-left span');
+      if (label && textSpan) {
+        label.textContent = textSpan.textContent.trim();
+      }
+    }
+  });
+}
+
+function initCustomDropdowns() {
+  const dropdowns = document.querySelectorAll('.custom-dropdown');
+
+  dropdowns.forEach(dropdown => {
+    const trigger = dropdown.querySelector('.custom-dropdown-trigger');
+    const label = dropdown.querySelector('.custom-dropdown-label');
+    const items = dropdown.querySelectorAll('.custom-dropdown-item');
+    const hiddenSelect = dropdown.querySelector('select');
+
+    if (!trigger) return;
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = dropdown.classList.contains('open');
+      dropdowns.forEach(d => {
+        d.classList.remove('open');
+        const t = d.querySelector('.custom-dropdown-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+      if (!isOpen) {
+        dropdown.classList.add('open');
+        trigger.setAttribute('aria-expanded', 'true');
+      }
+    });
+
+    items.forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = item.dataset.value;
+        const textSpan = item.querySelector('.custom-dropdown-item-left span');
+        const text = textSpan ? textSpan.textContent.trim() : item.textContent.trim();
+
+        items.forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+
+        if (label) label.textContent = text;
+        if (hiddenSelect) {
+          hiddenSelect.value = val;
+          hiddenSelect.dispatchEvent(new Event('change'));
+        }
+
+        dropdown.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+      });
+    });
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.custom-dropdown')) {
+      dropdowns.forEach(d => {
+        d.classList.remove('open');
+        const t = d.querySelector('.custom-dropdown-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    }
+  });
+
+  // Close on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      dropdowns.forEach(d => {
+        d.classList.remove('open');
+        const t = d.querySelector('.custom-dropdown-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    }
+  });
+}
+
+function updateTableSortIndicators() {
+  document.querySelectorAll('#package-table-wrapper th.th-sortable').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    const sortField = th.dataset.sort;
+    if (currentSortPackage === `${sortField}-asc`) {
+      th.classList.add('sorted-asc');
+    } else if (currentSortPackage === `${sortField}-desc`) {
+      th.classList.add('sorted-desc');
+    }
+  });
+  syncCustomDropdown('dropdown-sort-packages', currentSortPackage);
+}
+
+function updateInstalledTableSortIndicators() {
+  document.querySelectorAll('#installed-apps-table-wrapper th.th-sortable').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    const sortField = th.dataset.sortInstalled;
+    if (currentSortInstalled === `${sortField}-asc`) {
+      th.classList.add('sorted-asc');
+    } else if (currentSortInstalled === `${sortField}-desc`) {
+      th.classList.add('sorted-desc');
+    }
+  });
+  syncCustomDropdown('dropdown-sort-installed', currentSortInstalled);
+}
+
+// ─── Search & Sort Filter Listeners ──────────────────────────────────────────
 function bindSearch() {
+  initCustomDropdowns();
+
   if (searchInput) {
     searchInput.addEventListener('input', () => {
-      const query = searchInput.value.trim().toLowerCase();
-      filteredPackages = allPackages.filter(pkg =>
-        pkg.name.toLowerCase().includes(query) ||
-        pkg.id.toLowerCase().includes(query)
-      );
-      renderPackageTable(filteredPackages);
-      updateStats();
+      applyPackageFilters();
     });
   }
+
+  const sortSelect = document.getElementById('sort-packages-select');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', () => {
+      currentSortPackage = sortSelect.value;
+      applyPackageFilters();
+    });
+  }
+
+  // Header column click sort for updater
+  document.querySelectorAll('#package-table-wrapper th.th-sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const sortField = th.dataset.sort;
+      if (!sortField) return;
+      let newSort = `${sortField}-asc`;
+      if (currentSortPackage === `${sortField}-asc`) {
+        newSort = `${sortField}-desc`;
+      }
+      currentSortPackage = newSort;
+      if (sortSelect) sortSelect.value = newSort;
+      applyPackageFilters();
+    });
+  });
 
   const searchInstalledInput = document.getElementById('search-installed-input');
   if (searchInstalledInput) {
     searchInstalledInput.addEventListener('input', () => {
-      const query = searchInstalledInput.value.trim().toLowerCase();
-      filteredInstalledApps = allInstalledApps.filter(app =>
-        (app.name && app.name.toLowerCase().includes(query)) ||
-        (app.publisher && app.publisher.toLowerCase().includes(query))
-      );
-      renderInstalledAppsTable(filteredInstalledApps);
+      applyInstalledFilters();
     });
   }
+
+  const sortInstalledSelect = document.getElementById('sort-installed-select');
+  if (sortInstalledSelect) {
+    sortInstalledSelect.addEventListener('change', () => {
+      currentSortInstalled = sortInstalledSelect.value;
+      applyInstalledFilters();
+    });
+  }
+
+  // Header column click sort for uninstaller
+  document.querySelectorAll('#installed-apps-table-wrapper th.th-sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const sortField = th.dataset.sortInstalled;
+      if (!sortField) return;
+      let newSort = `${sortField}-asc`;
+      if (currentSortInstalled === `${sortField}-asc`) {
+        newSort = `${sortField}-desc`;
+      }
+      currentSortInstalled = newSort;
+      if (sortInstalledSelect) sortInstalledSelect.value = newSort;
+      applyInstalledFilters();
+    });
+  });
 }
 
 // ─── System Info ───────────────────────────────────────────────────────────────
@@ -464,16 +855,16 @@ async function handleScan(manualTrigger = false) {
 
     const rawPackages = result.packages ?? [];
     allPackages = rawPackages.filter(pkg => !sessionCompletedPkgIds.has(pkg.id));
-    filteredPackages = [...allPackages];
-    searchInput.value = '';
     selectedPackageIds.clear();
+
+    if (searchInput) searchInput.value = '';
+    applyPackageFilters();
 
     if (allPackages.length === 0) {
       showState('empty');
       setStatusBar('Sistema al día', 'No se encontraron actualizaciones pendientes', 100, 'idle');
       showToast('Tu sistema está al día.', 'success');
     } else {
-      renderPackageTable(filteredPackages);
       showState('table');
       setStatusBar('Escaneo finalizado', `${allPackages.length} actualización(es) disponible(s)`, 100, 'idle');
       showToast(`${allPackages.length} actualizaciones encontradas.`, 'info');
@@ -1059,6 +1450,13 @@ function renderPackageTable(packages) {
            </svg>
          </div>`;
 
+    const metaParts = [];
+    if (pkg.publisher && pkg.publisher !== 'Desconocido') {
+      metaParts.push(`<span class="app-meta-publisher" title="Creador / Editor"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${sanitize(pkg.publisher)}</span>`);
+    }
+
+    const sizeBadgeHtml = formatSizeBadge(pkg.sizeMb);
+
     tr.innerHTML = `
       <td class="col-check">
         <input type="checkbox" class="custom-checkbox pkg-checkbox"
@@ -1073,6 +1471,7 @@ function renderPackageTable(packages) {
           ${iconHtml}
           <div class="app-name-details">
             <div class="app-name">${sanitize(pkg.name)}</div>
+            ${metaParts.length > 0 ? `<div class="app-sub-meta">${metaParts.join('')}</div>` : ''}
           </div>
         </div>
       </td>
@@ -1085,8 +1484,8 @@ function renderPackageTable(packages) {
       <td class="col-available">
         <span class="version-badge badge-available">${sanitize(pkg.available || '—')}</span>
       </td>
-      <td class="col-source">
-        <span class="source-tag">${sanitize(pkg.source || 'winget')}</span>
+      <td class="col-size">
+        ${sizeBadgeHtml}
       </td>
     `;
 
@@ -1215,18 +1614,32 @@ function setStatusBar(title, subtitle = '', pct = null, status = 'idle') {
     if (status === 'error') statusIndicator.classList.add('error');
   }
 
+  const hasPct = (pct !== null && pct !== undefined && pct !== '');
   if (progressPct) {
-    progressPct.textContent = (pct !== null && pct !== undefined && pct !== '') ? `${pct}%` : '';
+    progressPct.textContent = hasPct ? `${Math.round(Number(pct))}%` : '';
   }
 
   if (progressBar) {
-    if (pct !== null && pct !== undefined && pct !== '') {
-      progressBar.style.transition = 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-      progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+    if (hasPct) {
+      const numPct = Math.min(100, Math.max(0, Number(pct)));
+      progressBar.classList.remove('indeterminate');
+      
+      const currentWidth = parseFloat(progressBar.style.width) || 0;
+      // If resetting from completed or near 100%, snap to start instantly to avoid backwards animation
+      if (numPct === 0 || (currentWidth >= 95 && numPct < currentWidth)) {
+        progressBar.style.transition = 'none';
+        progressBar.style.width = `${numPct}%`;
+        void progressBar.offsetWidth; // Force DOM reflow
+      } else {
+        progressBar.style.transition = 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
+        progressBar.style.width = `${numPct}%`;
+      }
     } else if (status === 'busy') {
-      progressBar.style.transition = 'width 25s cubic-bezier(0.1, 0.5, 0.1, 1)';
-      progressBar.style.width = '85%';
+      progressBar.classList.add('indeterminate');
+      progressBar.style.transition = 'none';
+      progressBar.style.width = '';
     } else {
+      progressBar.classList.remove('indeterminate');
       progressBar.style.transition = 'width 0.3s ease';
       progressBar.style.width = '0%';
     }
@@ -1235,7 +1648,12 @@ function setStatusBar(title, subtitle = '', pct = null, status = 'idle') {
 
 function resetStatusBar(message = 'Listo', sub = 'Sistema preparado') {
   setStatusBar(message, sub, null, 'idle');
-  if (progressBar) progressBar.style.width = '0%';
+  if (progressBar) {
+    progressBar.classList.remove('indeterminate');
+    progressBar.style.transition = 'none';
+    progressBar.style.width = '0%';
+    void progressBar.offsetWidth;
+  }
 }
 
 function setupProgressTracking(total, actionName = 'Actualizando') {
@@ -1306,6 +1724,18 @@ function formatBytes(bytes) {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+function formatSizeBadge(sizeMb) {
+  const mb = Number(sizeMb) || 0;
+  if (mb <= 0) {
+    return `<span class="app-size size-empty"><span class="size-val">—</span></span>`;
+  }
+  if (mb >= 1024) {
+    return `<span class="app-size"><span class="size-val">${(mb / 1024).toFixed(2)}</span><span class="size-unit">GB</span></span>`;
+  }
+  const formattedMb = mb >= 1 ? mb.toFixed(1) : mb.toFixed(2);
+  return `<span class="app-size"><span class="size-val">${formattedMb}</span><span class="size-unit">MB</span></span>`;
 }
 
 // ─── Confirmation Modal Bindings ───────────────────────────────────────────────
@@ -1401,27 +1831,34 @@ function bindNavigation() {
   const navUpdates = document.getElementById('nav-updates');
   const navUninstaller = document.getElementById('nav-uninstaller');
   const navGpu = document.getElementById('nav-gpu');
+  const navRestore = document.getElementById('nav-restore');
 
   const sidebarUpdatesControls = document.getElementById('sidebar-updates-controls');
   const sidebarUninstallerControls = document.getElementById('sidebar-uninstaller-controls');
   const sidebarGpuControls = document.getElementById('sidebar-gpu-controls');
+  const sidebarRestoreControls = document.getElementById('sidebar-restore-controls');
 
   const mainUpdatesView = document.getElementById('main-updates-view');
   const mainUninstallerView = document.getElementById('main-uninstaller-view');
   const mainGpuView = document.getElementById('main-gpu-view');
+  const mainRestoreView = document.getElementById('main-restore-view');
 
   const switchView = (target) => {
+    currentMainView = target;
     if (navUpdates) navUpdates.classList.toggle('active', target === 'updates');
     if (navUninstaller) navUninstaller.classList.toggle('active', target === 'uninstaller');
     if (navGpu) navGpu.classList.toggle('active', target === 'gpu');
+    if (navRestore) navRestore.classList.toggle('active', target === 'restore');
 
     if (sidebarUpdatesControls) sidebarUpdatesControls.classList.toggle('hidden', target !== 'updates');
     if (sidebarUninstallerControls) sidebarUninstallerControls.classList.toggle('hidden', target !== 'uninstaller');
     if (sidebarGpuControls) sidebarGpuControls.classList.toggle('hidden', target !== 'gpu');
+    if (sidebarRestoreControls) sidebarRestoreControls.classList.toggle('hidden', target !== 'restore');
 
     if (mainUpdatesView) mainUpdatesView.classList.toggle('hidden', target !== 'updates');
     if (mainUninstallerView) mainUninstallerView.classList.toggle('hidden', target !== 'uninstaller');
     if (mainGpuView) mainGpuView.classList.toggle('hidden', target !== 'gpu');
+    if (mainRestoreView) mainRestoreView.classList.toggle('hidden', target !== 'restore');
 
     if (target === 'uninstaller' && allInstalledApps.length === 0) {
       handleScanInstalled();
@@ -1429,11 +1866,15 @@ function bindNavigation() {
     if (target === 'gpu' && !gpuDataLoaded) {
       handleDetectGpu();
     }
+    if (target === 'restore' && !restoreDataLoaded) {
+      handleLoadRestorePoints(false);
+    }
   };
 
   if (navUpdates) navUpdates.addEventListener('click', () => switchView('updates'));
   if (navUninstaller) navUninstaller.addEventListener('click', () => switchView('uninstaller'));
   if (navGpu) navGpu.addEventListener('click', () => switchView('gpu'));
+  if (navRestore) navRestore.addEventListener('click', () => switchView('restore'));
 }
 
 function bindUninstallerControls() {
@@ -1452,6 +1893,11 @@ function bindUninstallerControls() {
     btnUninstallSelected.addEventListener('click', handleUninstallSelected);
   }
 
+  const btnUninstallSelectedTop = document.getElementById('btn-uninstall-selected-top');
+  if (btnUninstallSelectedTop) {
+    btnUninstallSelectedTop.addEventListener('click', handleUninstallSelected);
+  }
+
   if (btnSelectAllInst) {
     btnSelectAllInst.addEventListener('click', () => setAllInstalledCheckboxes(true));
   }
@@ -1466,14 +1912,22 @@ function bindUninstallerControls() {
 
   if (searchInstalledInput) {
     searchInstalledInput.addEventListener('input', () => {
-      const query = searchInstalledInput.value.trim().toLowerCase();
-      filteredInstalledApps = allInstalledApps.filter(app =>
-        app.name.toLowerCase().includes(query) ||
-        (app.publisher && app.publisher.toLowerCase().includes(query))
-      );
-      renderInstalledAppsTable(filteredInstalledApps);
+      applyInstalledFilters();
     });
   }
+
+  const chkRestorePoint = document.getElementById('chk-create-restore-point');
+  if (chkRestorePoint) {
+    chkRestorePoint.checked = localStorage.getItem('winget_create_restore_point') === 'true';
+    chkRestorePoint.addEventListener('change', () => {
+      localStorage.setItem('winget_create_restore_point', chkRestorePoint.checked ? 'true' : 'false');
+    });
+  }
+}
+
+function shouldCreateRestorePoint() {
+  const chk = document.getElementById('chk-create-restore-point');
+  return chk ? chk.checked : false;
 }
 
 function getSelectedInstalledApps() {
@@ -1484,10 +1938,16 @@ function updateInstalledSelectionStats() {
   const count = selectedInstalledAppIds.size;
   const countEl = document.getElementById('installed-selected-count');
   if (countEl) countEl.textContent = count;
+  const countTopEl = document.getElementById('installed-selected-count-top');
+  if (countTopEl) countTopEl.textContent = count;
 
   const btnUninstallSelected = document.getElementById('btn-uninstall-selected');
   if (btnUninstallSelected) {
     btnUninstallSelected.disabled = count === 0 || isUpdating;
+  }
+  const btnUninstallSelectedTop = document.getElementById('btn-uninstall-selected-top');
+  if (btnUninstallSelectedTop) {
+    btnUninstallSelectedTop.disabled = count === 0 || isUpdating;
   }
 
   const chkAllInstalledHeader = document.getElementById('chk-all-installed-header');
@@ -1542,11 +2002,12 @@ async function handleScanInstalled() {
     const apps = await window.electronAPI.listInstalledApps();
     
     allInstalledApps = (apps || []).sort((a, b) => (b.sizeMb || 0) - (a.sizeMb || 0));
-    filteredInstalledApps = [...allInstalledApps];
     selectedInstalledAppIds.clear();
 
     const searchInstalledInput = document.getElementById('search-installed-input');
     if (searchInstalledInput) searchInstalledInput.value = '';
+
+    applyInstalledFilters();
 
     if (stateInstalledLoading) stateInstalledLoading.classList.add('hidden');
 
@@ -1554,7 +2015,6 @@ async function handleScanInstalled() {
       if (stateInstalledEmpty) stateInstalledEmpty.classList.remove('hidden');
       setStatusBar('Escaneo finalizado', 'No se encontraron aplicaciones instaladas', 100, 'idle');
     } else {
-      renderInstalledAppsTable(filteredInstalledApps);
       if (installedAppsTableWrapper) {
         installedAppsTableWrapper.classList.remove('hidden');
       }
@@ -1613,7 +2073,7 @@ function renderInstalledAppsTable(apps) {
 
   if (appsToRender.length === 0) {
     const tabName = currentInstalledTab === 'games' ? 'juegos' : (currentInstalledTab === 'system' ? 'componentes del sistema' : 'aplicaciones cotidianas');
-    installedAppsTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 32px; color: var(--color-text-secondary);">No se encontraron ${tabName} en esta categoría.</td></tr>`;
+    installedAppsTbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 32px; color: var(--color-text-secondary);">No se encontraron ${tabName} en esta categoría.</td></tr>`;
     updateInstalledSelectionStats();
     return;
   }
@@ -1628,10 +2088,7 @@ function renderInstalledAppsTable(apps) {
       tr.classList.add('selected');
     }
 
-    const sizeMb = app.sizeMb || 0;
-    const sizeStr = sizeMb >= 1024
-      ? `${(sizeMb / 1024).toFixed(2)} GB`
-      : `${sizeMb >= 1 ? sizeMb.toFixed(1) : sizeMb.toFixed(2)} MB`;
+    const sizeBadgeHtml = formatSizeBadge(app.sizeMb);
 
     const iconHtml = (app.iconBase64 && app.iconBase64.length > 50)
       ? `<img class="app-icon-img" src="data:image/png;base64,${app.iconBase64}" alt="" />`
@@ -1665,13 +2122,7 @@ function renderInstalledAppsTable(apps) {
         <span class="version-badge badge-version">${sanitize(app.version || '—')}</span>
       </td>
       <td class="col-size">
-        <span class="app-size">${sizeStr}</span>
-      </td>
-      <td class="col-action">
-        <button class="btn-uninstall" data-id="${sanitize(app.id)}" aria-label="Desinstalar ${sanitize(app.name)}">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
-          <span>Desinstalar</span>
-        </button>
+        ${sizeBadgeHtml}
       </td>
     `;
 
@@ -1690,9 +2141,9 @@ function renderInstalledAppsTable(apps) {
       });
     }
 
-    // Row click to toggle selection (except button or input)
+    // Row click to toggle selection (except checkbox input)
     tr.addEventListener('click', (e) => {
-      if (e.target.closest('.btn-uninstall') || e.target.closest('.custom-checkbox')) return;
+      if (e.target.closest('.custom-checkbox')) return;
       if (selectedInstalledAppIds.has(app.id)) {
         selectedInstalledAppIds.delete(app.id);
         tr.classList.remove('selected');
@@ -1704,14 +2155,6 @@ function renderInstalledAppsTable(apps) {
       }
       updateInstalledSelectionStats();
     });
-
-    const btnUninstall = tr.querySelector('.btn-uninstall');
-    if (btnUninstall) {
-      btnUninstall.addEventListener('click', (e) => {
-        e.stopPropagation();
-        handleUninstallClean(app);
-      });
-    }
 
     installedAppsTbody.appendChild(tr);
   });
@@ -1807,7 +2250,10 @@ function handleUninstallClean(app) {
       markAppUninstalled(data.success);
     });
 
-    window.electronAPI.uninstallAppClean(app);
+    window.electronAPI.uninstallAppClean({
+      ...app,
+      createRestorePoint: shouldCreateRestorePoint()
+    });
   }, 5, 'Confirmar Desinstalación');
 }
 
@@ -1821,21 +2267,26 @@ function handleUninstallSelected() {
     return;
   }
 
+  const count = selectedApps.length;
   const appListStr = selectedApps.map(a => `• ${a.name} (${a.sizeMb >= 1024 ? (a.sizeMb / 1024).toFixed(1) + ' GB' : a.sizeMb + ' MB'})`).slice(0, 10).join('\n');
   const moreCountStr = selectedApps.length > 10 ? `\n... y ${selectedApps.length - 10} aplicaciones más` : '';
   const hasSystem = selectedApps.some(a => isSystemPackage(a));
 
-  const warningMsg = `⚠️ ADVERTENCIA DE DESINSTALACIÓN EN LOTE (5s)\n\n¿Estás seguro de que deseas desinstalar de forma limpia las siguientes ${selectedApps.length} aplicaciones seleccionadas?\n\n${appListStr}${moreCountStr}\n\n• Se ejecutarán los desinstaladores de cada programa de forma secuencial.\n• 🛡️ ESCUDO ACTIVO: Todos los lanzadores (Epic Games, Steam, EA, Ubisoft) y componentes compartidos están blindados.\n• Se limpiarán únicamente los residuos huérfanos específicos de cada aplicación.${hasSystem ? '\n\n🔴 ATENCIÓN: Has seleccionado componentes del sistema o controladores sensibles.' : ''}`;
+  const warningMsg = count === 1
+    ? `⚠️ ADVERTENCIA DE DESINSTALACIÓN\n\n¿Estás seguro de que deseas desinstalar de forma limpia la aplicación "${selectedApps[0].name}"?\n\n• Se ejecutará el desinstalador oficial del programa.\n• 🛡️ ESCUDO ACTIVO: Todos los lanzadores (Epic Games, Steam, EA, Ubisoft) y componentes compartidos están blindados.\n• Se limpiarán únicamente los residuos huérfanos específicos de esta aplicación.${hasSystem ? '\n\n🔴 ATENCIÓN: Has seleccionado un componente del sistema o controlador sensible.' : ''}`
+    : `⚠️ ADVERTENCIA DE DESINSTALACIÓN EN LOTE (5s)\n\n¿Estás seguro de que deseas desinstalar de forma limpia las siguientes ${selectedApps.length} aplicaciones seleccionadas?\n\n${appListStr}${moreCountStr}\n\n• Se ejecutarán los desinstaladores de cada programa de forma secuencial.\n• 🛡️ ESCUDO ACTIVO: Todos los lanzadores (Epic Games, Steam, EA, Ubisoft) y componentes compartidos están blindados.\n• Se limpiarán únicamente los residuos huérfanos específicos de cada aplicación.${hasSystem ? '\n\n🔴 ATENCIÓN: Has seleccionado componentes del sistema o controladores sensibles.' : ''}`;
 
   showConfirmationModal(warningMsg, async () => {
     isUpdating = true;
     
     const btnScanInstalled = document.getElementById('btn-scan-installed');
     const btnUninstallSelected = document.getElementById('btn-uninstall-selected');
+    const btnUninstallSelectedTop = document.getElementById('btn-uninstall-selected-top');
     const btnForceClean = document.getElementById('btn-force-clean');
 
     if (btnScanInstalled) btnScanInstalled.disabled = true;
     if (btnUninstallSelected) btnUninstallSelected.disabled = true;
+    if (btnUninstallSelectedTop) btnUninstallSelectedTop.disabled = true;
 
     clearLog();
     const total = selectedApps.length;
@@ -1890,15 +2341,19 @@ function handleUninstallSelected() {
           markBatchAppDone();
         });
 
-        window.electronAPI.uninstallAppClean(currentApp);
+        window.electronAPI.uninstallAppClean({
+          ...currentApp,
+          createRestorePoint: shouldCreateRestorePoint()
+        });
       });
     }
 
     isUpdating = false;
     if (btnScanInstalled) btnScanInstalled.disabled = false;
     if (btnForceClean) btnForceClean.classList.add('hidden');
-    setStatusBar('Desinstalación en lote finalizada', `Se procesaron las ${total} aplicaciones seleccionadas.`, 100, 'idle');
-    showToast(`Se han desinstalado ${total} aplicaciones limpiamente.`, 'success');
+    updateInstalledSelectionStats();
+    setStatusBar('Desinstalación finalizada', `Se procesaron las ${total} aplicaciones seleccionadas.`, 100, 'idle');
+    showToast(`Se han desinstalado ${total} aplicación(es) limpiamente.`, 'success');
   }, 5, 'Confirmar Desinstalación');
 }
 
@@ -2231,15 +2686,19 @@ function renderGpuDetailsDashboard(primaryGpu, isNvidia, isAmd, isIntel, status,
   if (metricVramBar) metricVramBar.style.width = `${Math.max(8, vramPct)}%`;
 
   // Metric 2: Temperature
-  const tempVal = smi?.TemperatureC ? `${smi.TemperatureC} °C` : '48 °C';
-  const tempNum = smi?.TemperatureC || 48;
+  const hasTempSensor = smi && typeof smi.TemperatureC === 'number' && smi.TemperatureC > 0;
+  const tempVal = hasTempSensor ? `${smi.TemperatureC} °C` : '—';
+  const tempNum = hasTempSensor ? smi.TemperatureC : 0;
   const metricTempVal = document.getElementById('metric-temp-val');
   const metricTempBar = document.getElementById('metric-temp-bar');
   const metricTempPill = document.getElementById('metric-temp-pill');
   if (metricTempVal) metricTempVal.textContent = tempVal;
-  if (metricTempBar) metricTempBar.style.width = `${Math.min(100, Math.round((tempNum / 90) * 100))}%`;
+  if (metricTempBar) metricTempBar.style.width = hasTempSensor ? `${Math.min(100, Math.round((tempNum / 90) * 100))}%` : '0%';
   if (metricTempPill) {
-    if (tempNum < 55) {
+    if (!hasTempSensor) {
+      metricTempPill.className = 'metric-status-pill';
+      metricTempPill.textContent = 'Sensor N/D';
+    } else if (tempNum < 55) {
       metricTempPill.className = 'metric-status-pill pill-cool';
       metricTempPill.textContent = 'Fresca';
     } else if (tempNum < 75) {
@@ -2252,27 +2711,29 @@ function renderGpuDetailsDashboard(primaryGpu, isNvidia, isAmd, isIntel, status,
   }
 
   // Metric 3: Power
-  const powerVal = smi?.PowerDrawW ? `${Math.round(smi.PowerDrawW)} W` : '38 W';
-  const powerLimit = smi?.PowerLimitW ? `/ ${Math.round(smi.PowerLimitW)} W TGP` : '/ 300 W TGP';
-  const powerPct = smi?.PowerDrawW && smi?.PowerLimitW ? Math.round((smi.PowerDrawW / smi.PowerLimitW) * 100) : 12;
+  const hasPowerSensor = smi && typeof smi.PowerDrawW === 'number' && smi.PowerDrawW > 0;
+  const powerVal = hasPowerSensor ? `${Math.round(smi.PowerDrawW)} W` : '—';
+  const powerLimit = smi?.PowerLimitW ? `/ ${Math.round(smi.PowerLimitW)} W TGP` : (hasPowerSensor ? 'TGP Dinámico' : '—');
+  const powerPct = hasPowerSensor && smi?.PowerLimitW ? Math.round((smi.PowerDrawW / smi.PowerLimitW) * 100) : (hasPowerSensor ? 10 : 0);
   const metricPowerVal = document.getElementById('metric-power-val');
   const metricPowerLimit = document.getElementById('metric-power-limit');
   const metricPowerBar = document.getElementById('metric-power-bar');
   if (metricPowerVal) metricPowerVal.textContent = powerVal;
   if (metricPowerLimit) metricPowerLimit.textContent = powerLimit;
-  if (metricPowerBar) metricPowerBar.style.width = `${Math.max(8, powerPct)}%`;
+  if (metricPowerBar) metricPowerBar.style.width = `${Math.max(0, powerPct)}%`;
 
   // Metric 4: Utilization
-  const utilPct = smi?.GpuUtilPct !== undefined ? smi.GpuUtilPct : 4;
+  const hasUtilSensor = smi && smi.GpuUtilPct !== undefined && smi.GpuUtilPct !== null;
+  const utilPct = hasUtilSensor ? smi.GpuUtilPct : null;
   const metricUtilVal = document.getElementById('metric-util-val');
   const metricUtilBar = document.getElementById('metric-util-bar');
-  if (metricUtilVal) metricUtilVal.textContent = `${utilPct} %`;
-  if (metricUtilBar) metricUtilBar.style.width = `${Math.max(5, utilPct)}%`;
+  if (metricUtilVal) metricUtilVal.textContent = hasUtilSensor ? `${utilPct} %` : 'Activo';
+  if (metricUtilBar) metricUtilBar.style.width = hasUtilSensor ? `${Math.max(4, utilPct)}%` : '15%';
 
   // Metric 5: Display
   const resX = primaryGpu.ResolutionX || window.screen.width;
   const resY = primaryGpu.ResolutionY || window.screen.height;
-  const hz = primaryGpu.RefreshRate ? `@ ${primaryGpu.RefreshRate} Hz` : '@ 144 Hz';
+  const hz = primaryGpu.RefreshRate ? `@ ${primaryGpu.RefreshRate} Hz` : 'Frecuencia estándar';
   const metricDisplayRes = document.getElementById('metric-display-res');
   const metricDisplayHz = document.getElementById('metric-display-hz');
   if (metricDisplayRes) metricDisplayRes.textContent = `${resX} × ${resY}`;
@@ -2608,6 +3069,749 @@ function handleInstallGpuSuite(suite) {
   }, 5, 'Confirmar Instalación');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HTML ESCAPING & UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SYSTEM RESTORE POINTS LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function bindRestoreControls() {
+  const btnScanRestore = document.getElementById('btn-scan-restore');
+  const btnCreateSidebar = document.getElementById('btn-create-restore-sidebar');
+  const btnCreateTopbar = document.getElementById('btn-create-restore-topbar');
+  const btnOpenRstrui = document.getElementById('btn-open-rstrui');
+  const btnOpenRstruiTopbar = document.getElementById('btn-open-rstrui-topbar');
+  const btnOpenSettings = document.getElementById('btn-open-protection-settings');
+  const btnRequestAdmin = document.getElementById('btn-request-admin-restore');
+  const searchRestoreInput = document.getElementById('search-restore-input');
+
+  const modalCreate = document.getElementById('modal-create-restore');
+  const inputDesc = document.getElementById('input-restore-desc');
+  const btnModalCancel = document.getElementById('btn-modal-restore-cancel');
+  const btnModalConfirm = document.getElementById('btn-modal-restore-confirm');
+
+  if (btnScanRestore) {
+    btnScanRestore.addEventListener('click', () => {
+      const statStatus = document.getElementById('stat-restore-status');
+      const stateAdmin = document.getElementById('state-restore-admin');
+      const needsAdmin = (statStatus && statStatus.textContent === 'Admin req.') ||
+                         (stateAdmin && !stateAdmin.classList.contains('hidden')) ||
+                         allRestorePoints.length === 0;
+      handleLoadRestorePoints(needsAdmin);
+    });
+  }
+
+  const openCreateModal = () => {
+    if (isUpdating) return;
+    if (modalCreate) {
+      if (inputDesc) {
+        const now = new Date();
+        const dateStr = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+        inputDesc.value = `WinGet Manager - Punto manual (${dateStr})`;
+      }
+      modalCreate.classList.remove('hidden');
+      if (inputDesc) {
+        setTimeout(() => {
+          inputDesc.focus();
+          inputDesc.select();
+        }, 50);
+      }
+    }
+  };
+
+  const closeCreateModal = () => {
+    if (modalCreate) modalCreate.classList.add('hidden');
+  };
+
+  if (btnCreateSidebar) btnCreateSidebar.addEventListener('click', openCreateModal);
+  if (btnCreateTopbar) btnCreateTopbar.addEventListener('click', openCreateModal);
+  if (btnModalCancel) btnModalCancel.addEventListener('click', closeCreateModal);
+
+  if (btnModalConfirm) {
+    btnModalConfirm.addEventListener('click', () => {
+      const desc = inputDesc?.value?.trim() || 'WinGet Manager - Punto manual';
+      closeCreateModal();
+      handleCreateRestorePoint(desc);
+    });
+  }
+
+  if (inputDesc) {
+    inputDesc.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const desc = inputDesc.value.trim() || 'WinGet Manager - Punto manual';
+        closeCreateModal();
+        handleCreateRestorePoint(desc);
+      }
+    });
+  }
+
+  if (modalCreate) {
+    modalCreate.addEventListener('click', (e) => {
+      if (e.target === modalCreate) closeCreateModal();
+    });
+  }
+
+  if (btnOpenRstrui) {
+    btnOpenRstrui.addEventListener('click', () => {
+      window.electronAPI.openSystemRestoreWizard();
+      showToast('Abriendo Asistente de Recuperación de Windows (rstrui)...', 'info');
+    });
+  }
+
+  if (btnOpenRstruiTopbar) {
+    btnOpenRstruiTopbar.addEventListener('click', () => {
+      window.electronAPI.openSystemRestoreWizard();
+      showToast('Abriendo Asistente de Recuperación de Windows (rstrui)...', 'info');
+    });
+  }
+
+  if (btnOpenSettings) {
+    btnOpenSettings.addEventListener('click', () => {
+      window.electronAPI.openSystemRestoreSettings();
+      showToast('Abriendo Configuración de Protección del Sistema...', 'info');
+    });
+  }
+
+  const btnDeleteAll = document.getElementById('btn-delete-all-restore');
+  if (btnDeleteAll) {
+    btnDeleteAll.addEventListener('click', () => {
+      if (!allRestorePoints || allRestorePoints.length === 0) {
+        showToast('No hay puntos de restauración cargados para eliminar.', 'info');
+        return;
+      }
+      showConfirmationModal(
+        `¿Estás seguro de que deseas eliminar TODOS los puntos de restauración (${allRestorePoints.length} punto(s))?\n\nSe eliminarán todas las instantáneas de recuperación de Windows liberando espacio en el disco. Esta acción no se puede deshacer.`,
+        () => {
+          handleDeleteAllRestorePoints();
+        },
+        2,
+        'Eliminar Todos los Puntos'
+      );
+    });
+  }
+
+  if (btnRequestAdmin) {
+    btnRequestAdmin.addEventListener('click', () => {
+      handleLoadRestorePoints(true);
+    });
+  }
+
+  if (searchRestoreInput) {
+    searchRestoreInput.addEventListener('input', () => {
+      applyRestoreFilters();
+    });
+  }
+}
+
+async function handleLoadRestorePoints(elevate = false, keepStatus = false) {
+  const stateIdle = document.getElementById('state-restore-idle');
+  const stateLoading = document.getElementById('state-restore-loading');
+  const stateAdmin = document.getElementById('state-restore-admin');
+  const stateEmpty = document.getElementById('state-restore-empty');
+  const tableWrapper = document.getElementById('restore-table-wrapper');
+  const statTotal = document.getElementById('stat-restore-total');
+  const statStatus = document.getElementById('stat-restore-status');
+  const heroBadge = document.getElementById('restore-hero-badge');
+
+  if (stateIdle) stateIdle.classList.add('hidden');
+  if (stateAdmin) stateAdmin.classList.add('hidden');
+  if (stateEmpty) stateEmpty.classList.add('hidden');
+  if (tableWrapper) tableWrapper.classList.add('hidden');
+  if (stateLoading) stateLoading.classList.remove('hidden');
+
+  if (!keepStatus) {
+    setStatusBar('Consultando puntos de restauración...', 'Leyendo instantáneas del sistema...', null, 'busy');
+  }
+
+  try {
+    const res = await window.electronAPI.listRestorePoints({ elevate });
+    restoreDataLoaded = true;
+    if (stateLoading) stateLoading.classList.add('hidden');
+
+    if (res.requiresAdmin && !res.success) {
+      if (stateAdmin) stateAdmin.classList.remove('hidden');
+      if (statStatus) {
+        statStatus.textContent = 'Admin req.';
+        statStatus.style.color = '#f59e0b';
+      }
+      if (!keepStatus) resetStatusBar();
+      return;
+    }
+
+    if (!res.success) {
+      showToast(`Error al obtener puntos: ${res.error || 'Desconocido'}`, 'error');
+      if (stateEmpty) stateEmpty.classList.remove('hidden');
+      if (!keepStatus) resetStatusBar();
+      return;
+    }
+
+    // Protection status
+    const isEnabled = res.enabled !== false;
+    if (statStatus) {
+      statStatus.textContent = isEnabled ? 'Activa' : 'Desactivada';
+      statStatus.style.color = isEnabled ? '#10b981' : '#ef4444';
+    }
+    if (heroBadge) {
+      heroBadge.textContent = isEnabled ? 'Activo' : 'Desactivado';
+      heroBadge.className = `badge-status-pill ${isEnabled ? 'badge-active' : 'badge-inactive'}`;
+    }
+
+    allRestorePoints = Array.isArray(res.points) ? res.points : (res.points ? [res.points] : []);
+    if (statTotal) statTotal.textContent = allRestorePoints.length;
+
+    if (!keepStatus) {
+      setStatusBar(
+        'Puntos de restauración cargados',
+        `${allRestorePoints.length} punto(s) de restauración encontrado(s)`,
+        100,
+        'idle'
+      );
+    }
+
+    applyRestoreFilters();
+  } catch (err) {
+    if (stateLoading) stateLoading.classList.add('hidden');
+    if (stateEmpty) stateEmpty.classList.remove('hidden');
+    showToast(`Error: ${err.message}`, 'error');
+    if (!keepStatus) resetStatusBar();
+  }
+}
+
+function applyRestoreFilters() {
+  const searchInput = document.getElementById('search-restore-input');
+  const query = (searchInput?.value || '').toLowerCase().trim();
+
+  if (!query) {
+    filteredRestorePoints = [...allRestorePoints];
+  } else {
+    filteredRestorePoints = allRestorePoints.filter(p => {
+      const desc = (p.description || '').toLowerCase();
+      const type = (p.typeName || '').toLowerCase();
+      const date = (p.creationTime || '').toLowerCase();
+      const seq = String(p.sequenceNumber || '');
+      return desc.includes(query) || type.includes(query) || date.includes(query) || seq.includes(query);
+    });
+  }
+
+  renderRestorePointsList(filteredRestorePoints);
+}
+
+function formatRestoreDate(rawDate) {
+  if (!rawDate) return '—';
+  if (typeof rawDate === 'string' && /^\d{14}/.test(rawDate)) {
+    const y = rawDate.slice(0, 4);
+    const m = rawDate.slice(4, 6);
+    const d = rawDate.slice(6, 8);
+    const hh = rawDate.slice(8, 10);
+    const mm = rawDate.slice(10, 12);
+    const ss = rawDate.slice(12, 14);
+    return `${d}/${m}/${y} ${hh}:${mm}:${ss}`;
+  }
+  if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    const parts = rawDate.split(/[- :T]/);
+    if (parts.length >= 6) {
+      return `${parts[2]}/${parts[1]}/${parts[0]} ${parts[3]}:${parts[4]}:${parts[5]}`;
+    }
+  }
+  return rawDate;
+}
+
+function renderRestorePointsList(points) {
+  const tbody = document.getElementById('restore-tbody');
+  const tableWrapper = document.getElementById('restore-table-wrapper');
+  const stateEmpty = document.getElementById('state-restore-empty');
+
+  if (!tbody || !tableWrapper) return;
+
+  if (!points || points.length === 0) {
+    tableWrapper.classList.add('hidden');
+    if (stateEmpty) stateEmpty.classList.remove('hidden');
+    return;
+  }
+
+  if (stateEmpty) stateEmpty.classList.add('hidden');
+  tableWrapper.classList.remove('hidden');
+
+  tbody.innerHTML = '';
+
+  // Sort descending by sequenceNumber (newest points on top)
+  const sorted = [...points].sort((a, b) => (b.sequenceNumber || 0) - (a.sequenceNumber || 0));
+
+  sorted.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.className = 'package-row';
+
+    // Type pill class
+    let typeClass = 'type-checkpoint';
+    const typeLower = (p.typeName || '').toLowerCase();
+    if (typeLower.includes('instalación') || typeLower.includes('install')) {
+      typeClass = 'type-install';
+    } else if (typeLower.includes('desinstalación') || typeLower.includes('uninstall')) {
+      typeClass = 'type-uninstall';
+    }
+
+    tr.innerHTML = `
+      <td class="col-restore-num">
+        <span class="restore-num-pill">#${p.sequenceNumber}</span>
+      </td>
+      <td class="col-name">
+        <div class="package-name" title="${escapeHtml(p.description)}">${escapeHtml(p.description)}</div>
+      </td>
+      <td class="col-restore-date">
+        <span>${escapeHtml(formatRestoreDate(p.creationTime))}</span>
+      </td>
+      <td class="col-restore-type">
+        <span class="restore-type-pill ${typeClass}">${escapeHtml(p.typeName || 'Punto del sistema')}</span>
+      </td>
+      <td class="col-restore-action">
+        <div class="restore-action-buttons">
+          <button class="btn btn-ghost btn-xs btn-restore-item" title="Abrir asistente de restauración en este punto" aria-label="Restaurar este punto">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <span>Restaurar</span>
+          </button>
+          <button class="btn btn-ghost btn-xs btn-delete-restore-item" title="Eliminar este punto de restauración" aria-label="Eliminar este punto">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            <span>Eliminar</span>
+          </button>
+        </div>
+      </td>
+    `;
+
+    const btnRestoreItem = tr.querySelector('.btn-restore-item');
+    if (btnRestoreItem) {
+      btnRestoreItem.addEventListener('click', () => {
+        window.electronAPI.openSystemRestoreWizard();
+        showToast(`Abriendo Asistente de Recuperación para el punto #${p.sequenceNumber}...`, 'info');
+      });
+    }
+
+    const btnDeleteItem = tr.querySelector('.btn-delete-restore-item');
+    if (btnDeleteItem) {
+      btnDeleteItem.addEventListener('click', () => {
+        showConfirmationModal(
+          `¿Estás seguro de que deseas eliminar el punto de restauración #${p.sequenceNumber}?\n\n"${p.description}" (${formatRestoreDate(p.creationTime)})\n\nEsta acción eliminará la instantánea del sistema liberando espacio en disco y no se puede deshacer.`,
+          () => {
+            handleDeleteRestorePoint(p.sequenceNumber, p.description);
+          },
+          0,
+          'Eliminar Punto'
+        );
+      });
+    }
+
+    tbody.appendChild(tr);
+  });
+}
+
+async function handleCreateRestorePoint(description) {
+  if (isUpdating) return;
+  const desc = (description || 'WinGet Manager - Punto manual').trim();
+
+  isUpdating = true;
+  setUIBusy(true);
+
+  // Progressive forward progression: always moving forward from 6% to 94%
+  let currentPct = 6;
+  setStatusBar('Creando punto de restauración...', 'Iniciando servicio de instantáneas de Windows (VSS)...', currentPct, 'busy');
+  showToast('Iniciando creación del punto de restauración (confirma el aviso de Windows si aparece)...', 'info');
+
+  const progressTimer = setInterval(() => {
+    if (currentPct < 26) {
+      currentPct += 4;
+      setStatusBar('Creando punto de restauración...', 'Verificando volumen de protección del sistema...', currentPct, 'busy');
+    } else if (currentPct < 65) {
+      currentPct += 3;
+      setStatusBar('Creando punto de restauración...', `Creando instantánea: "${desc}"`, currentPct, 'busy');
+    } else if (currentPct < 85) {
+      currentPct += 2;
+      setStatusBar('Creando punto de restauración...', 'Escribiendo catálogo y registrando estado del sistema...', currentPct, 'busy');
+    } else if (currentPct < 94) {
+      currentPct += 1;
+      setStatusBar('Creando punto de restauración...', 'Finalizando registro de punto de restauración...', currentPct, 'busy');
+    }
+  }, 400);
+
+  try {
+    const res = await window.electronAPI.createRestorePoint(desc);
+    clearInterval(progressTimer);
+
+    if (res.success) {
+      setStatusBar('Punto de restauración creado', `Instantánea creada: "${desc}"`, 100, 'idle');
+      showToast('Punto de restauración creado con éxito.', 'success');
+      // Give the user a moment to see the 100% completion before refreshing points list silently
+      await new Promise(r => setTimeout(r, 650));
+      await handleLoadRestorePoints(true, true);
+    } else {
+      showToast(`No se pudo crear el punto: ${res.error || 'Error desconocido'}`, 'error');
+      setStatusBar('Error al crear punto', res.error || 'Fallo del sistema', 0, 'error');
+    }
+  } catch (err) {
+    clearInterval(progressTimer);
+    showToast(`Error inesperado: ${err.message}`, 'error');
+    resetStatusBar();
+  } finally {
+    isUpdating = false;
+    setUIBusy(false);
+  }
+}
+
+async function handleDeleteRestorePoint(sequenceNumber, description) {
+  if (isUpdating) return;
+  const seq = parseInt(sequenceNumber, 10);
+  if (isNaN(seq) || seq <= 0) return;
+
+  isUpdating = true;
+  setUIBusy(true);
+
+  let delPct = 12;
+  setStatusBar('Eliminando punto de restauración...', `Localizando instantánea #${seq}...`, delPct, 'busy');
+  showToast(`Eliminando punto de restauración #${seq}... (Acepta el diálogo de Administrador si aparece)`, 'info');
+
+  const delTimer = setInterval(() => {
+    if (delPct < 85) {
+      delPct += 14;
+      setStatusBar('Eliminando punto de restauración...', `Purgando instantánea #${seq}: ${description || ''}`, delPct, 'busy');
+    }
+  }, 350);
+
+  try {
+    const res = await window.electronAPI.deleteRestorePoint(seq);
+    clearInterval(delTimer);
+
+    if (res.success) {
+      setStatusBar('Punto de restauración eliminado', `Instantánea #${seq} eliminada con éxito`, 100, 'idle');
+      showToast(res.message || `Punto #${seq} eliminado con éxito.`, 'success');
+      await new Promise(r => setTimeout(r, 500));
+      await handleLoadRestorePoints(true, true);
+    } else {
+      showToast(`No se pudo eliminar el punto: ${res.error || 'Operación cancelada'}`, 'error');
+      resetStatusBar();
+    }
+  } catch (err) {
+    clearInterval(delTimer);
+    showToast(`Error inesperado: ${err.message}`, 'error');
+    resetStatusBar();
+  } finally {
+    isUpdating = false;
+    setUIBusy(false);
+  }
+}
+
+async function handleDeleteAllRestorePoints() {
+  if (isUpdating) return;
+  isUpdating = true;
+  setUIBusy(true);
+
+  let allPct = 10;
+  setStatusBar('Purgando puntos de restauración...', 'Eliminando todas las instantáneas de Windows...', allPct, 'busy');
+  showToast('Purgando todos los puntos de restauración... (Acepta el diálogo de Administrador si aparece)', 'info');
+
+  const allTimer = setInterval(() => {
+    if (allPct < 90) {
+      allPct += 10;
+      setStatusBar('Purgando puntos de restauración...', 'Liberando espacio en disco de instantáneas VSS...', allPct, 'busy');
+    }
+  }, 400);
+
+  try {
+    const res = await window.electronAPI.deleteAllRestorePoints();
+    clearInterval(allTimer);
+
+    if (res.success) {
+      setStatusBar('Puntos eliminados', 'Todas las instantáneas han sido eliminadas', 100, 'idle');
+      showToast(res.message || 'Se han eliminado todos los puntos de restauración.', 'success');
+      await new Promise(r => setTimeout(r, 500));
+      await handleLoadRestorePoints(true, true);
+    } else {
+      showToast(`No se pudieron eliminar los puntos: ${res.error || 'Operación cancelada'}`, 'error');
+      resetStatusBar();
+    }
+  } catch (err) {
+    clearInterval(allTimer);
+    showToast(`Error inesperado: ${err.message}`, 'error');
+    resetStatusBar();
+  } finally {
+    isUpdating = false;
+    setUIBusy(false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP SELF-UPDATER (UI & LOGIC)
+// ═══════════════════════════════════════════════════════════════════════════════
+let currentAppUpdateInfo = null;
+let downloadedInstallerPath = null;
+let isDownloadingAppUpdate = false;
+
+function initAppUpdater() {
+  const btnTitlebarVer = document.getElementById('titlebar-app-version');
+  const btnCheckSidebar = document.getElementById('btn-check-app-update');
+  const btnCloseModal = document.getElementById('btn-close-update-modal');
+  const btnCancel = document.getElementById('btn-update-cancel');
+  const btnStart = document.getElementById('btn-update-start');
+  const btnInstall = document.getElementById('btn-update-install-now');
+
+  if (btnTitlebarVer) {
+    btnTitlebarVer.addEventListener('click', () => handleCheckForAppUpdates(true));
+  }
+
+  if (btnCheckSidebar) {
+    btnCheckSidebar.addEventListener('click', () => handleCheckForAppUpdates(true));
+  }
+
+  if (btnCloseModal) {
+    btnCloseModal.addEventListener('click', closeAppUpdateModal);
+  }
+
+  if (btnCancel) {
+    btnCancel.addEventListener('click', closeAppUpdateModal);
+  }
+
+  if (btnStart) {
+    btnStart.addEventListener('click', handleStartDownloadAppUpdate);
+  }
+
+  if (btnInstall) {
+    btnInstall.addEventListener('click', handleInstallAppUpdateNow);
+  }
+
+  // Listener for update detection event pushed from main process
+  if (window.electronAPI && window.electronAPI.onAppUpdateAvailable) {
+    window.electronAPI.onAppUpdateAvailable((updateInfo) => {
+      showAppUpdateModal(updateInfo);
+    });
+  }
+
+  // Listener for download progress
+  if (window.electronAPI && window.electronAPI.onAppUpdateDownloadProgress) {
+    window.electronAPI.onAppUpdateDownloadProgress((progress) => {
+      updateAppDownloadProgress(progress);
+    });
+  }
+}
+
+async function handleCheckForAppUpdates(manual = false) {
+  const btnCheckSidebar = document.getElementById('btn-check-app-update');
+  if (btnCheckSidebar) {
+    btnCheckSidebar.classList.add('checking');
+  }
+
+  if (manual) {
+    showToast('Comprobando actualizaciones en tu repositorio de GitHub...', 'info');
+  }
+
+  try {
+    const res = await window.electronAPI.checkForAppUpdates({ manual });
+
+    if (btnCheckSidebar) {
+      btnCheckSidebar.classList.remove('checking');
+    }
+
+    if (res.error) {
+      if (manual) {
+        showToast(`Error al consultar actualizaciones: ${res.error}`, 'error');
+      }
+      return;
+    }
+
+    if (res.updateAvailable) {
+      showAppUpdateModal(res);
+    } else {
+      if (manual) {
+        showToast(`¡WinGet Manager ya está actualizado a la versión más reciente (v${res.currentVersion || '1.0.2'})!`, 'success');
+      }
+    }
+  } catch (err) {
+    if (btnCheckSidebar) btnCheckSidebar.classList.remove('checking');
+    if (manual) showToast(`Fallo de conexión: ${err.message}`, 'error');
+  }
+}
+
+function showAppUpdateModal(info) {
+  currentAppUpdateInfo = info;
+  downloadedInstallerPath = null;
+  isDownloadingAppUpdate = false;
+
+  const modal = document.getElementById('app-update-modal');
+  const viewPrompt = document.getElementById('app-update-view-prompt');
+  const viewProgress = document.getElementById('app-update-view-progress');
+  const viewReady = document.getElementById('app-update-view-ready');
+
+  const curVer = document.getElementById('app-update-cur-ver');
+  const newVer = document.getElementById('app-update-new-ver');
+  const dateEl = document.getElementById('app-update-date');
+  const notesEl = document.getElementById('app-update-notes');
+
+  const btnStart = document.getElementById('btn-update-start');
+  const btnInstall = document.getElementById('btn-update-install-now');
+  const btnCancel = document.getElementById('btn-update-cancel');
+
+  if (curVer) curVer.textContent = `v${info.currentVersion || '1.0.2'}`;
+  if (newVer) newVer.textContent = `v${info.latestVersion || info.releaseTag || ''}`;
+
+  if (dateEl) {
+    if (info.publishedAt) {
+      const d = new Date(info.publishedAt);
+      dateEl.textContent = `Publicada: ${d.toLocaleDateString()} (${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    } else {
+      dateEl.textContent = 'Disponible en GitHub Releases';
+    }
+  }
+
+  if (notesEl) {
+    notesEl.textContent = info.releaseNotes || 'Mejoras de rendimiento, correcciones y nuevas funcionalidades.';
+  }
+
+  // Switch to Prompt view
+  if (viewPrompt) viewPrompt.classList.remove('hidden');
+  if (viewProgress) viewProgress.classList.add('hidden');
+  if (viewReady) viewReady.classList.add('hidden');
+
+  if (btnStart) {
+    btnStart.classList.remove('hidden');
+    btnStart.disabled = false;
+  }
+  if (btnInstall) btnInstall.classList.add('hidden');
+  if (btnCancel) {
+    btnCancel.classList.remove('hidden');
+    btnCancel.textContent = 'Recordar más tarde';
+  }
+
+  if (modal) {
+    modal.classList.remove('hidden');
+  }
+}
+
+function closeAppUpdateModal() {
+  if (isDownloadingAppUpdate) {
+    const ok = confirm('Hay una descarga de actualización en curso. ¿Deseas cerrarla de todos modos?');
+    if (!ok) return;
+  }
+  const modal = document.getElementById('app-update-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+  }
+}
+
+async function handleStartDownloadAppUpdate() {
+  if (!currentAppUpdateInfo || !currentAppUpdateInfo.downloadUrl) {
+    showToast('No se encontró un archivo ejecutable válido en la versión para descargar.', 'warning');
+    return;
+  }
+
+  isDownloadingAppUpdate = true;
+
+  const viewPrompt = document.getElementById('app-update-view-prompt');
+  const viewProgress = document.getElementById('app-update-view-progress');
+  const viewReady = document.getElementById('app-update-view-ready');
+
+  const btnStart = document.getElementById('btn-update-start');
+  const btnCancel = document.getElementById('btn-update-cancel');
+  const assetNameEl = document.getElementById('download-asset-name');
+
+  if (assetNameEl) {
+    assetNameEl.textContent = currentAppUpdateInfo.assetName || 'WinGet-Manager-Setup.exe';
+  }
+
+  if (viewPrompt) viewPrompt.classList.add('hidden');
+  if (viewProgress) viewProgress.classList.remove('hidden');
+  if (viewReady) viewReady.classList.add('hidden');
+
+  if (btnStart) btnStart.classList.add('hidden');
+  if (btnCancel) btnCancel.textContent = 'Cancelar descarga';
+
+  try {
+    const res = await window.electronAPI.downloadAppUpdate({
+      downloadUrl: currentAppUpdateInfo.downloadUrl,
+      assetName: currentAppUpdateInfo.assetName
+    });
+
+    isDownloadingAppUpdate = false;
+
+    if (res.success && res.filePath) {
+      downloadedInstallerPath = res.filePath;
+      showAppUpdateReady(res.filePath);
+    } else {
+      showToast(`Error al descargar la actualización: ${res.error || 'Fallo desconocido'}`, 'error');
+      closeAppUpdateModal();
+    }
+  } catch (err) {
+    isDownloadingAppUpdate = false;
+    showToast(`Fallo en la descarga: ${err.message}`, 'error');
+    closeAppUpdateModal();
+  }
+}
+
+function updateAppDownloadProgress(progress) {
+  const fill = document.getElementById('download-progress-fill');
+  const pctText = document.getElementById('download-pct-text');
+  const mbText = document.getElementById('download-mb-text');
+  const speedText = document.getElementById('download-speed-text');
+
+  const pct = progress.percent !== null ? progress.percent : 50;
+  if (fill) fill.style.width = `${pct}%`;
+  if (pctText) pctText.textContent = `${pct}%`;
+
+  const transMB = (progress.transferred / (1024 * 1024)).toFixed(1);
+  const totalMB = progress.total > 0 ? (progress.total / (1024 * 1024)).toFixed(1) : '?';
+  if (mbText) mbText.textContent = `${transMB} MB / ${totalMB} MB`;
+
+  const speedMB = (progress.speed / (1024 * 1024)).toFixed(1);
+  if (speedText) speedText.textContent = `${speedMB} MB/s`;
+}
+
+function showAppUpdateReady(filePath) {
+  const viewPrompt = document.getElementById('app-update-view-prompt');
+  const viewProgress = document.getElementById('app-update-view-progress');
+  const viewReady = document.getElementById('app-update-view-ready');
+
+  const btnStart = document.getElementById('btn-update-start');
+  const btnInstall = document.getElementById('btn-update-install-now');
+  const btnCancel = document.getElementById('btn-update-cancel');
+
+  if (viewPrompt) viewPrompt.classList.add('hidden');
+  if (viewProgress) viewProgress.classList.add('hidden');
+  if (viewReady) viewReady.classList.remove('hidden');
+
+  if (btnStart) btnStart.classList.add('hidden');
+  if (btnInstall) btnInstall.classList.remove('hidden');
+  if (btnCancel) {
+    btnCancel.classList.remove('hidden');
+    btnCancel.textContent = 'Cerrar ventana';
+  }
+}
+
+async function handleInstallAppUpdateNow() {
+  if (!downloadedInstallerPath) {
+    showToast('No se encontró el instalador descargado.', 'error');
+    return;
+  }
+
+  showToast('Iniciando instalador oficial y cerrando WinGet Manager...', 'info');
+
+  try {
+    const res = await window.electronAPI.installAppUpdate(downloadedInstallerPath);
+    if (!res.success) {
+      showToast(`Error al ejecutar el instalador: ${res.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
 // ─── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
+
 

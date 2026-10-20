@@ -1,68 +1,68 @@
 {
-  "name": "winget-manager",
-  "version": "1.0.1",
-  "description": "Panel de control para gestionar actualizaciones de software via winget",
-  "main": "main.js",
-  "author": "WinGet Manager",
-  "license": "MIT",
-  "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64"
-  },
-  "dependencies": {
-    "electron-store": "^8.1.0"
-  },
-  "devDependencies": {
-    "@electron/packager": "^20.0.0",
-    "cross-env": "^7.0.3",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
-  },
-  "build": {
-    "appId": "com.wingetmanager.app",
-    "productName": "WinGet Manager",
-    "asar": true,
-    "directories": {
-      "output": "dist"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "requestedExecutionLevel": "requireAdministrator"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "include": "build/installer.nsh"
-    },
-    "extraResources": [
-      {
-        "from": "scripts",
-        "to": "scripts",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "files": [
-      "**/*",
-      "!node_modules/**/*",
-      "node_modules/electron-store/**/*"
-    ]
-  }
+    "name":  "winget-manager",
+    "version":  "1.0.2",
+    "description":  "Panel de control para gestionar actualizaciones de software via winget",
+    "main":  "main.js",
+    "author":  "WinGet Manager",
+    "license":  "MIT",
+    "scripts":  {
+                    "start":  "electron .",
+                    "dev":  "electron . --dev",
+                    "build":  "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64"
+                },
+    "dependencies":  {
+                         "electron-store":  "^8.1.0"
+                     },
+    "devDependencies":  {
+                            "@electron/packager":  "^20.0.0",
+                            "cross-env":  "^7.0.3",
+                            "electron":  "^28.0.0",
+                            "electron-builder":  "^24.9.1"
+                        },
+    "build":  {
+                  "appId":  "com.wingetmanager.app",
+                  "productName":  "WinGet Manager",
+                  "asar":  true,
+                  "directories":  {
+                                      "output":  "dist"
+                                  },
+                  "win":  {
+                              "target":  [
+                                             {
+                                                 "target":  "nsis",
+                                                 "arch":  [
+                                                              "x64"
+                                                          ]
+                                             },
+                                             {
+                                                 "target":  "portable",
+                                                 "arch":  [
+                                                              "x64"
+                                                          ]
+                                             }
+                                         ],
+                              "requestedExecutionLevel":  "requireAdministrator"
+                          },
+                  "nsis":  {
+                               "oneClick":  false,
+                               "allowToChangeInstallationDirectory":  true,
+                               "createDesktopShortcut":  true,
+                               "createStartMenuShortcut":  true,
+                               "include":  "build/installer.nsh"
+                           },
+                  "extraResources":  [
+                                         {
+                                             "from":  "scripts",
+                                             "to":  "scripts",
+                                             "filter":  [
+                                                            "**/*"
+                                                        ]
+                                         }
+                                     ],
+                  "files":  [
+                                "**/*",
+                                "!node_modules/**/*",
+                                "node_modules/electron-store/**/*"
+                            ]
+              }
 }
