@@ -2,7 +2,7 @@
 
   <img src="logo.png" alt="WinGet Manager Logo" width="110" height="110" style="border-radius: 50%; box-shadow: 0 8px 32px rgba(110, 231, 183, 0.35);" />
 
-  # WinGet Manager ⚡
+  # WinGet Manager
 
   ### *El panel de control visual definitivo para gestionar, actualizar y desinstalar software en Windows.*
 
