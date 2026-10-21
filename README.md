@@ -9,7 +9,7 @@
   [![GitHub Release](https://img.shields.io/github/v/release/joselyky/Win-Get-Manager?color=6ee7b7&label=Versi%C3%B3n&style=for-the-badge)](https://github.com/joselyky/Win-Get-Manager/releases/latest)
   [![Platform](https://img.shields.io/badge/Plataforma-Windows%2010%20%7C%2011-0078d4?style=for-the-badge&logo=windows)](https://github.com/joselyky/Win-Get-Manager)
   [![Engine](https://img.shields.io/badge/Motor-WinGet%20%2B%20Electron-4f8ef7?style=for-the-badge&logo=electron)](https://github.com/joselyky/Win-Get-Manager)
-  [![License](https://img.shields.io/badge/Licencia-MIT-34d399?style=for-the-badge)](LICENSE)
+  [![License](https://img.shields.io/badge/Licencia-GPLv3-34d399?style=for-the-badge)](LICENSE)
 
   <br />
 
@@ -19,9 +19,9 @@
 
   <p align="center">
     <a href="#-descarga-e-instalación"><strong>Descargar Instalador »</strong></a> •
+    <a href="#-seguridad-confianza-y-privacidad-garantizada"><strong>Seguridad & Confianza</strong></a> •
     <a href="#-características-destacadas">Características</a> •
-    <a href="#-módulos-del-sistema">Módulos</a> •
-    <a href="#-cómo-funciona">Cómo Funciona</a>
+    <a href="#-módulos-de-la-interfaz">Módulos</a>
   </p>
 
 </div>
@@ -38,6 +38,32 @@ Microsoft introdujo **WinGet** como la herramienta oficial por línea de comando
 3. **Desinstala de forma limpia** cualquier aplicación, rastreando y eliminando carpetas residuales y claves del registro huérfanas.
 4. **Protege tus videojuegos y plataformas**: Cuenta con un escudo (*Platform Shield*) para evitar que al desinstalar un juego se dañen lanzadores como Steam o Epic Games.
 5. **Se auto-actualiza**: Se conecta de forma segura a este repositorio de GitHub y te avisa cuando existe una nueva versión oficial lista para instalar.
+
+---
+
+## 🛡️ Seguridad, Confianza y Privacidad Garantizada
+
+WinGet Manager ha sido desarrollado bajo un modelo de **tolerancia cero al malware, control absoluto del usuario y total transparencia**:
+
+### 🔒 1. Descargas Exclusivas de Fuentes Oficiales (SHA-256)
+* **Infraestructura oficial de Microsoft**: Todas las aplicaciones provienen del repositorio verificado de Microsoft ([winget-pkgs](https://github.com/microsoft/winget-pkgs)) y de los servidores de descarga directos del desarrollador original (ej. Mozilla, Google, Discord, Valve).
+* **Verificación Criptográfica**: Cada instalador se comprueba mediante su hash **SHA-256** oficial antes de ejecutarse, garantizando que el archivo no ha sido manipulado ni alterado.
+* **Cero intermediarios**: No utilizamos proxies, mirrors de terceros ni instaladores empaquetados con publicidad (*bundleware* o barras de herramientas).
+
+### 🛡️ 2. Blindaje Activo del Sistema y Lanzadores
+* **Integridad del SO protegida**: La aplicación jamás toca ni modifica directorios protegidos de Windows (`C:\Windows\System32`, `WinSxS` o registros de arranque).
+* **Platform Shield**: Al desinstalar videojuegos, un escudo activo protege los directorios raíz de **Steam, Epic Games, Ubisoft Connect, EA App, Riot Games, Battle.net y GOG Galaxy**, impidiendo que se borren librerías compartidas o lanzadores por error.
+* **Solo residuos confirmados**: El limpiador profundo únicamente purga carpetas huérfanas en `%AppData%` y claves obsoletas del registro vinculadas de forma demostrable al programa eliminado.
+
+### 👤 3. Cero Acciones Automáticas (Control Total en tus Manos)
+* **Consentimiento explícito**: Nada se actualiza, instala o desinstala a tus espaldas. Cada acción requiere que selecciones las casillas correspondientes y confirmes la operación.
+* **Sin tareas ocultas**: No se ejecutan servicios residentes ni tareas invisibles en segundo plano que consuman recursos o modifiquen archivos sin que te enteres.
+* **Consola de Registros en Directo**: Tienes a tu disposición la salida oficial en tiempo real de cada comando ejecutado en streaming.
+
+### 💾 4. Puntos de Restauración y Código Abierto
+* **Rollback nativo de Windows**: Posibilidad de generar instantáneas del sistema operativo (`rstrui.exe`) con un clic antes de cualquier cambio para revertir fácilmente cualquier imprevisto.
+* **100% Código Abierto (GPLv3)**: Todo el código fuente de WinGet Manager está publicado en este repositorio de GitHub bajo licencia libre GNU GPLv3 para ser auditado por cualquier desarrollador del mundo.
+* **Ejecución 100% Local**: No requiere registro, no recopila contraseñas ni datos personales y no contiene telemetría invasiva. Tus datos nunca abandonan tu ordenador.
 
 ---
 
@@ -68,9 +94,9 @@ Microsoft introdujo **WinGet** como la herramienta oficial por línea de comando
 - **Protección previa**: Crea una instantánea del sistema operativo antes de instalar drivers o desinstalar programas críticos.
 - **Gestor integrado**: Consulta cuántos puntos de restauración existen, elimínalos selectivamente para liberar espacio o abre el asistente oficial `rstrui.exe` directamente.
 
-### 📦 6. Copia de Seguridad de Aplicaciones (Exportar / Importar)
-- Exporta tu lista de aplicaciones instaladas a un archivo `.json` portable.
-- Importa la lista en cualquier equipo nuevo o tras formatear Windows para restaurar todas tus herramientas automáticamente.
+### ⚡ 6. Actualizaciones Masivas en Lote y Filtros Rápidos
+- **Cola desatendida**: Selecciona múltiples programas o actualiza todo tu catálogo de una sola vez en segundo plano.
+- **Selector inteligente**: Filtra por categorías, detecta versiones en segundos y olvídate de interactuar con instaladores uno por uno.
 
 ---
 
@@ -131,7 +157,7 @@ npm run build
 
 ## 📜 Licencia
 
-Este proyecto está bajo la licencia **MIT**. Eres libre de usar, modificar y distribuir esta aplicación según los términos de la misma.
+Este proyecto está protegido bajo la licencia **GNU General Public License v3.0 (GPLv3)**. Eres libre de usar, estudiar y contribuir al código fuente. Cualquier redistribución o trabajo derivado está obligado legalmente a permanecer bajo la misma licencia GPLv3, ser de código abierto y mantener el reconocimiento explícito a la autoría original. Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 <div align="center">
   <sub>Desarrollado con dedicación por <b><a href="https://github.com/joselyky">Jose Antonio Baeza Pineda (@joselyky)</a></b></sub>
